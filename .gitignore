@@ -1,0 +1,23 @@
+node_modules/
+dist/
+ui/dist/
+docs/todo/
+
+# Local config (may contain secrets or client-specific paths)
+drmclaw.config.local.*
+
+# State directory
+.drmclaw/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
