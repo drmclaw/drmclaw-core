@@ -8,6 +8,8 @@ import type { SkillEntry } from "../skills/types.js";
 export interface CommonExecutionPolicy {
 	/** Allowed tool names. Empty = allow all. */
 	toolAllowlist?: string[];
+	/** Allowed tool kinds. Empty = allow all kinds. */
+	toolKindAllowlist?: string[];
 	/** Allowed skill names. Empty = allow all. */
 	skillAllowlist?: string[];
 	/** File path patterns the agent may read/write. */
@@ -52,16 +54,40 @@ export interface DirectExecutionPolicy extends CommonExecutionPolicy {
 export type ExecutionPolicy = AcpExecutionPolicy | DirectExecutionPolicy;
 
 /** Lifecycle phases emitted during an agent run. */
-export type LifecyclePhase = "start" | "end" | "error";
+export type LifecyclePhase = "start" | "prompt_sent" | "end" | "error";
+
+/** Origin tag carried by every RuntimeEvent so downstream consumers
+ *  (runner, event store, UI) never need to re-derive source from type. */
+export type RuntimeEventSource = "runtime" | "acp";
 
 /** Events emitted during an AgentRuntime run. */
-export type RuntimeEvent =
+export type RuntimeEvent = { source: RuntimeEventSource } & (
 	| { type: "lifecycle"; phase: "start" }
+	| { type: "lifecycle"; phase: "prompt_sent" }
 	| { type: "lifecycle"; phase: "end"; result: TaskResult }
 	| { type: "lifecycle"; phase: "error"; error: string }
 	| { type: "stream"; delta: string }
-	| { type: "tool_call"; tool: string; status: string; args?: unknown }
-	| { type: "tool_result"; tool: string; result: unknown };
+	| {
+			type: "tool_call";
+			tool: string;
+			status: string;
+			kind?: string;
+			args?: unknown;
+			toolCallId?: string;
+	  }
+	| { type: "tool_result"; tool: string; result: unknown; toolCallId?: string }
+	| { type: "thinking"; text: string }
+	| {
+			type: "plan";
+			entries: Array<{ content: string; priority: string; status: string }>;
+	  }
+	| {
+			type: "usage";
+			used: number;
+			size: number;
+			cost?: { amount: number; currency: string } | null;
+	  }
+);
 
 /** Base options shared by all AgentRuntime backends. */
 interface BaseRuntimeOptions {

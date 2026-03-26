@@ -6,7 +6,7 @@
  */
 
 // Config
-export { loadDrMClawConfig } from "./config/loader.js";
+export { loadDrMClawConfig, resolveConfigFile } from "./config/loader.js";
 export {
 	configSchema,
 	defineConfig,
@@ -20,6 +20,9 @@ export type {
 	EmbeddedProvider,
 	LLMProvider,
 } from "./config/schema.js";
+
+// Paths
+export { PACKAGE_ROOT } from "./paths.js";
 
 // Skills
 export { loadSkills } from "./skills/loader.js";
@@ -46,11 +49,16 @@ export type {
 	ExecutionPolicy,
 	PlainExecutionPolicy,
 	RuntimeEvent,
+	RuntimeEventSource,
 } from "./runtime/types.js";
 
 // Runner
 export { TaskRunner } from "./runner/runner.js";
 export type { TaskResult, TaskStatus, TaskRequest, TaskRecord } from "./runner/types.js";
+
+// Events
+export { JsonlEventStore } from "./events/store.js";
+export type { EventStore, PersistedRuntimeEvent, EventPayload } from "./events/types.js";
 
 // Scheduler
 export { CronService } from "./scheduler/service.js";

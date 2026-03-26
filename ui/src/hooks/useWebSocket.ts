@@ -23,15 +23,22 @@ export function useWebSocket(): UseWebSocketReturn {
 	const [lastMessage, setLastMessage] = useState<WsMessage | null>(null);
 
 	useEffect(() => {
+		let disposed = false;
+
 		function connect() {
+			if (disposed) return;
 			const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 			const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
 			ws.onopen = () => setConnected(true);
 			ws.onclose = () => {
 				setConnected(false);
-				// Auto-reconnect after 2s
-				setTimeout(connect, 2000);
+				if (!disposed) {
+					setTimeout(connect, 2000);
+				}
+			};
+			ws.onerror = () => {
+				setConnected(false);
 			};
 			ws.onmessage = (event) => {
 				try {
@@ -47,7 +54,10 @@ export function useWebSocket(): UseWebSocketReturn {
 		}
 
 		connect();
-		return () => wsRef.current?.close();
+		return () => {
+			disposed = true;
+			wsRef.current?.close();
+		};
 	}, []);
 
 	const send = useCallback((data: unknown) => {

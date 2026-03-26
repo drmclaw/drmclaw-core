@@ -17,9 +17,15 @@ export async function evaluatePermission(
 	params: acp.RequestPermissionRequest,
 	allowedTools: Set<string>,
 	onToolCall?: LLMAdapterRunOptions["onToolCall"],
+	allowedToolKinds?: Set<string>,
 ): Promise<acp.RequestPermissionResponse> {
 	const toolTitle = params.toolCall?.title ?? "";
-	const isAllowed = allowedTools.size === 0 || allowedTools.has(toolTitle);
+	const toolKind = params.toolCall?.kind ?? "";
+
+	const titleAllowed = allowedTools.size === 0 || allowedTools.has(toolTitle);
+	const kindAllowed =
+		!allowedToolKinds || allowedToolKinds.size === 0 || allowedToolKinds.has(toolKind);
+	const isAllowed = titleAllowed && kindAllowed;
 
 	if (!isAllowed && onToolCall) {
 		const decision = await onToolCall(toolTitle, params);
@@ -70,8 +76,15 @@ export class AcpAdapter implements LLMAdapter {
 	async run(options: LLMAdapterRunOptions): Promise<TaskResult> {
 		const startTime = Date.now();
 		const allowedTools = new Set(options.allowedTools ?? this.config.llm.allowedTools);
+		const allowedToolKinds = new Set(
+			options.allowedToolKinds ?? this.config.llm.allowedToolKinds,
+		);
 		const emit = options.onEvent;
 		let output = "";
+		// Cache toolCallId → title/kind so tool_call_update events (which
+		// may lack title/kind) can resolve the originals.
+		const toolTitleByCallId = new Map<string, string>();
+		const toolKindByCallId = new Map<string, string>();
 
 		// Use provided sessionId or generate a one-off ID
 		const taskSessionId = options.sessionId ?? `acp-${Date.now()}`;
@@ -79,7 +92,12 @@ export class AcpAdapter implements LLMAdapter {
 		try {
 			const client: acp.Client = {
 				async requestPermission(params) {
-					return evaluatePermission(params, allowedTools, options.onToolCall);
+					return evaluatePermission(
+						params,
+						allowedTools,
+						options.onToolCall,
+						allowedToolKinds,
+					);
 				},
 				async sessionUpdate(params) {
 					const update = params.update;
@@ -91,16 +109,32 @@ export class AcpAdapter implements LLMAdapter {
 							output += content.text;
 							emit?.({ type: "text", text: content.text });
 						}
+					} else if (update.sessionUpdate === "agent_thought_chunk") {
+						const content = (update as { content?: { type?: string; text?: string } }).content;
+						if (content?.type === "text" && content.text) {
+							emit?.({ type: "thinking", text: content.text });
+						}
 					} else if (update.sessionUpdate === "tool_call") {
 						const toolCall = update as {
 							title?: string;
 							status?: string;
 							toolCallId?: string;
+							rawInput?: unknown;
+							kind?: string;
 						};
+						if (toolCall.toolCallId && toolCall.title) {
+							toolTitleByCallId.set(toolCall.toolCallId, toolCall.title);
+						}
+						if (toolCall.toolCallId && toolCall.kind) {
+							toolKindByCallId.set(toolCall.toolCallId, toolCall.kind);
+						}
 						emit?.({
 							type: "tool_call",
 							tool: toolCall.title ?? "unknown",
 							status: toolCall.status ?? "pending",
+							...(toolCall.kind && { kind: toolCall.kind }),
+							toolCallId: toolCall.toolCallId,
+							args: toolCall.rawInput,
 						});
 					} else if (update.sessionUpdate === "tool_call_update") {
 						const toolUpdate = update as {
@@ -108,24 +142,66 @@ export class AcpAdapter implements LLMAdapter {
 							title?: string;
 							status?: string;
 							rawOutput?: unknown;
+							rawInput?: unknown;
 							content?: unknown;
+							kind?: string;
 						};
+						const resolvedTitle =
+							toolUpdate.title ?? toolTitleByCallId.get(toolUpdate.toolCallId ?? "") ?? "unknown";
+						const resolvedKind =
+							toolUpdate.kind ?? toolKindByCallId.get(toolUpdate.toolCallId ?? "");
+						// When the tool finishes, emit tool_result FIRST so the
+						// event timeline reads: pending → result → completed.
+						if (toolUpdate.status === "completed" || toolUpdate.status === "failed") {
+							emit?.({
+								type: "tool_result",
+								tool: resolvedTitle,
+								result: toolUpdate.rawOutput ?? toolUpdate.content,
+								toolCallId: toolUpdate.toolCallId,
+							});
+						}
 						// Emit tool_call for every status update so downstream
 						// sees the full lifecycle (in_progress → completed / failed).
 						if (toolUpdate.status) {
 							emit?.({
 								type: "tool_call",
-								tool: toolUpdate.title ?? "unknown",
+								tool: resolvedTitle,
 								status: toolUpdate.status,
+								...(resolvedKind && { kind: resolvedKind }),
+								toolCallId: toolUpdate.toolCallId,
+								args: toolUpdate.rawInput,
 							});
 						}
-						// When the tool finishes, emit a tool_result with whatever
-						// output the ACP server reported.
-						if (toolUpdate.status === "completed" || toolUpdate.status === "failed") {
+					} else if (update.sessionUpdate === "plan") {
+						const plan = update as {
+							entries?: Array<{
+								content?: string;
+								priority?: string;
+								status?: string;
+							}>;
+						};
+						if (plan.entries && plan.entries.length > 0) {
 							emit?.({
-								type: "tool_result",
-								tool: toolUpdate.title ?? "unknown",
-								result: toolUpdate.rawOutput ?? toolUpdate.content,
+								type: "plan",
+								entries: plan.entries.map((e) => ({
+									content: e.content ?? "",
+									priority: e.priority ?? "medium",
+									status: e.status ?? "pending",
+								})),
+							});
+						}
+					} else if (update.sessionUpdate === "usage_update") {
+						const usage = update as {
+							used?: number;
+							size?: number;
+							cost?: { amount: number; currency: string } | null;
+						};
+						if (typeof usage.used === "number" && typeof usage.size === "number") {
+							emit?.({
+								type: "usage",
+								used: usage.used,
+								size: usage.size,
+								...(usage.cost && { cost: usage.cost }),
 							});
 						}
 					}

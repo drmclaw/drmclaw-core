@@ -1,18 +1,18 @@
 import { useState } from "react";
-import { ChatPanel } from "./components/ChatPanel.js";
+import { DebugConsole } from "./components/DebugConsole.js";
 import { JobList } from "./components/JobList.js";
 import { SkillList } from "./components/SkillList.js";
 import { TaskList } from "./components/TaskList.js";
 import { useWebSocket } from "./hooks/useWebSocket.js";
 
-type Tab = "chat" | "tasks" | "skills" | "jobs";
+type Tab = "console" | "tasks" | "skills" | "jobs";
 
 export function App() {
-	const [activeTab, setActiveTab] = useState<Tab>("chat");
+	const [activeTab, setActiveTab] = useState<Tab>("console");
 	const ws = useWebSocket();
 
 	const tabs: { id: Tab; label: string }[] = [
-		{ id: "chat", label: "Chat" },
+		{ id: "console", label: "Console" },
 		{ id: "tasks", label: "Tasks" },
 		{ id: "skills", label: "Skills" },
 		{ id: "jobs", label: "Jobs" },
@@ -38,13 +38,28 @@ export function App() {
 						</button>
 					))}
 				</nav>
+				<span className={`ml-auto text-xs ${ws.connected ? "text-green-400" : "text-red-400"}`}>
+					{ws.connected ? "connected" : "disconnected"}
+				</span>
 			</header>
 
-			<main className="flex-1 p-6">
-				{activeTab === "chat" && <ChatPanel ws={ws} />}
-				{activeTab === "tasks" && <TaskList />}
-				{activeTab === "skills" && <SkillList />}
-				{activeTab === "jobs" && <JobList />}
+			<main className="flex-1 overflow-hidden">
+				{activeTab === "console" && <DebugConsole ws={ws} />}
+				{activeTab === "tasks" && (
+					<div className="p-6">
+						<TaskList />
+					</div>
+				)}
+				{activeTab === "skills" && (
+					<div className="p-6">
+						<SkillList />
+					</div>
+				)}
+				{activeTab === "jobs" && (
+					<div className="p-6">
+						<JobList />
+					</div>
+				)}
 			</main>
 		</div>
 	);

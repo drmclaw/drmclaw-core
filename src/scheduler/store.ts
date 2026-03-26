@@ -2,15 +2,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { CronJob } from "./types.js";
 
-const DEFAULT_STORE_PATH = ".drmclaw/jobs.json";
-
 /**
  * Job store — persists cron jobs to a JSON file with atomic writes.
  */
 export class JobStore {
 	private jobs: Map<string, CronJob> = new Map();
 
-	constructor(private readonly storePath: string = DEFAULT_STORE_PATH) {}
+	constructor(private readonly storePath: string) {}
 
 	/** Load jobs from disk. */
 	async load(): Promise<void> {

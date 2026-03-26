@@ -1,7 +1,9 @@
+import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { loadDrMClawConfig } from "./config/loader.js";
 import { isCliProvider, resolveAcpCommandArgs } from "./config/schema.js";
 import { createDefaultRegistry } from "./connectors/registry.js";
+import { JsonlEventStore } from "./events/store.js";
 import { createLLMAdapter } from "./llm/index.js";
 import { TaskRunner } from "./runner/runner.js";
 import { createAgentRuntime } from "./runtime/agent.js";
@@ -31,15 +33,20 @@ async function main() {
 	// 4. Create task runner
 	const runner = new TaskRunner(config, runtime, skills);
 
-	// 5. Create scheduler
-	const scheduler = new CronService();
+	// 5. Create event store for durable event persistence
+	const eventStore = new JsonlEventStore(config.dataDir);
+	runner.setEventStore(eventStore);
+	console.log(`[drmclaw] Event store enabled (${config.dataDir}/events/tasks/)`);
+
+	// 6. Create scheduler
+	const scheduler = new CronService(join(config.dataDir, "jobs.json"));
 	scheduler.setRunner(runner);
 	if (config.scheduler.enabled) {
 		await scheduler.initialize();
 		console.log(`[drmclaw] Scheduler enabled (${scheduler.listJobs().length} job(s))`);
 	}
 
-	// 6. Create connectors
+	// 7. Create connectors
 	const { webConnector } = createDefaultRegistry();
 
 	// Wire web connector to task runner
@@ -47,8 +54,15 @@ async function main() {
 		const record = await runner.run(msg.content, {
 			userId: msg.userId,
 			sessionId: msg.sessionId,
-			onEvent: (event) => {
-				webConnector.broadcast(event);
+			onPersistedEvent: (event) => {
+				webConnector.broadcast({
+					type: "event",
+					taskId: event.taskId,
+					sequence: event.sequence,
+					timestamp: event.timestamp,
+					source: event.source,
+					event: event.event,
+				});
 			},
 		});
 		await webConnector.sendTaskStatus(record.id, record.result);
@@ -59,7 +73,7 @@ async function main() {
 		webConnector.broadcast({ type: "queue_notice", taskId, position });
 	});
 
-	// 7. Create and start HTTP server with WebSocket support
+	// 8. Create and start HTTP server with WebSocket support
 	const { app, injectWebSocket } = createApp(runner, scheduler, skills, webConnector);
 	const port = config.server.port;
 

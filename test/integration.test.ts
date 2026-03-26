@@ -1,4 +1,7 @@
+import { mkdtempSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { configSchema } from "../src/config/schema.js";
@@ -50,7 +53,7 @@ beforeAll(() => {
 		},
 	];
 	runner = new TaskRunner(config, runtime, skills);
-	const scheduler = new CronService();
+	const scheduler = new CronService(join(mkdtempSync(join(tmpdir(), "drmclaw-int-")), "jobs.json"));
 	scheduler.setRunner(runner);
 	const webConnector = new WebConnector();
 

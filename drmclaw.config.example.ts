@@ -42,6 +42,8 @@ export default defineConfig({
 		bootstrapMaxChars: 20000,
 	},
 
+	// dataDir: ".drmclaw",                   // runtime data directory (events, jobs)
+
 	scheduler: {
 		enabled: false,
 	},

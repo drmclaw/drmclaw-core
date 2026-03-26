@@ -4,6 +4,5 @@ export default defineConfig({
 	test: {
 		globals: true,
 		include: ["src/**/*.test.ts", "test/**/*.test.ts"],
-		exclude: ["test/real-provider-*.test.ts"],
 	},
 });

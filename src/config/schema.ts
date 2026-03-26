@@ -57,36 +57,32 @@ export type AcpConfig = z.infer<typeof acpConfigSchema>;
  *
  * Explicit `command` / `args` always override provider defaults.
  */
+const CLI_DEFAULT_COMMANDS: Record<CliProvider, string> = {
+	"github-copilot": "copilot",
+	"claude-cli": "claude",
+	"openai-cli": "openai",
+	"gemini-cli": "gemini",
+};
+
+const DEFAULT_ACP_ARGS = ["--acp", "--stdio"];
+
 export function resolveAcpCommandArgs(
 	provider: CliProvider,
 	acpCfg: AcpConfig,
 ): { command: string; args: string[] } {
-	switch (provider) {
-		case "github-copilot": {
-			const command = acpCfg.command ?? "copilot";
-			const baseArgs = acpCfg.args ?? ["--acp", "--stdio"];
-			const modelArgs =
-				acpCfg.githubCopilot.defaultModel && !baseArgs.includes("--model")
-					? ["--model", acpCfg.githubCopilot.defaultModel]
-					: [];
-			return { command, args: [...baseArgs, ...modelArgs] };
-		}
-		case "claude-cli": {
-			const command = acpCfg.command ?? "claude";
-			const args = acpCfg.args ?? ["--acp", "--stdio"];
-			return { command, args };
-		}
-		case "openai-cli": {
-			const command = acpCfg.command ?? "openai";
-			const args = acpCfg.args ?? ["--acp", "--stdio"];
-			return { command, args };
-		}
-		case "gemini-cli": {
-			const command = acpCfg.command ?? "gemini";
-			const args = acpCfg.args ?? ["--acp", "--stdio"];
-			return { command, args };
-		}
+	const command = acpCfg.command ?? CLI_DEFAULT_COMMANDS[provider];
+	const baseArgs = acpCfg.args ?? DEFAULT_ACP_ARGS;
+
+	// github-copilot supports --model injection from config
+	if (provider === "github-copilot") {
+		const modelArgs =
+			acpCfg.githubCopilot.defaultModel && !baseArgs.includes("--model")
+				? ["--model", acpCfg.githubCopilot.defaultModel]
+				: [];
+		return { command, args: [...baseArgs, ...modelArgs] };
 	}
+
+	return { command, args: baseArgs };
 }
 
 /** Full application config schema. */
@@ -111,6 +107,22 @@ export const configSchema = z.object({
 			acp: acpConfigSchema.default({}),
 			apiKey: z.string().optional(),
 			allowedTools: z.array(z.string()).default([]),
+			allowedToolKinds: z
+				.array(
+					z.enum([
+						"read",
+						"edit",
+						"delete",
+						"move",
+						"search",
+						"execute",
+						"think",
+						"fetch",
+						"switch_mode",
+						"other",
+					]),
+				)
+				.default([]),
 			retry: retryPolicySchema.default({}),
 			fallbacks: z.array(z.string()).default([]),
 		})
@@ -123,6 +135,8 @@ export const configSchema = z.object({
 			bootstrapTotalMaxChars: z.number().int().min(0).default(150_000),
 		})
 		.default({}),
+
+	dataDir: z.string().default(".drmclaw"),
 
 	scheduler: z
 		.object({

@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
 import type { WebConnector } from "../connectors/web.js";
+import { PACKAGE_ROOT } from "../paths.js";
 import type { TaskRunner } from "../runner/runner.js";
 import type { CronService } from "../scheduler/service.js";
 import type { SkillEntry } from "../skills/types.js";
@@ -64,7 +66,9 @@ export function createApp(
 
 	// Serve developer console static files in production
 	// In dev, the Vite dev server handles this with a proxy
-	app.use("/*", serveStatic({ root: "./ui/dist" }));
+	// Static files are package-internal assets — anchor to PACKAGE_ROOT
+	// so they serve correctly regardless of the server's working directory.
+	app.use("/*", serveStatic({ root: join(PACKAGE_ROOT, "ui/dist") }));
 
 	return { app, injectWebSocket };
 }

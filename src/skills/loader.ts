@@ -1,7 +1,7 @@
 import { access, readdir, realpath, stat } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, join, resolve } from "node:path";
 import type { DrMClawConfig } from "../config/schema.js";
+import { PACKAGE_ROOT } from "../paths.js";
 import { findMissingRequires } from "./check.js";
 import { parseSkillMd } from "./parser.js";
 import type { SkillEntry } from "./types.js";
@@ -9,12 +9,6 @@ import { MAX_CANDIDATES_PER_ROOT, MAX_SKILLS_PER_ROOT } from "./types.js";
 
 const SKILL_MD = "SKILL.md";
 const ENTRYPOINT_FILES = ["index.ts", "index.js", "main.ts", "main.js", "run.sh", "run.py"];
-
-/**
- * Package root — resolved relative to this module so bundled skills work
- * in repo dev (`src/`), npm-installed, and built-runtime (`dist/`) layouts.
- */
-const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** The schema default for skills.systemDir. */
 const DEFAULT_SYSTEM_DIR = "./skills";
@@ -118,7 +112,7 @@ async function loadSingleSkill(
 		// (catches symlinked SKILL.md pointing outside the allowed tree).
 		if (!(await isContainedIn(rootDir, skillMdPath))) return null;
 
-		const { meta } = await parseSkillMd(skillMdPath);
+		const { meta, body } = await parseSkillMd(skillMdPath);
 		const name = meta.name || basename(skillDir);
 		const entrypoint = meta.entrypoint
 			? resolve(skillDir, meta.entrypoint)
@@ -135,6 +129,7 @@ async function loadSingleSkill(
 			dir: skillDir,
 			skillMdPath,
 			entrypoint: entrypoint ?? undefined,
+			content: body.trim() || undefined,
 			requires: meta.requires ?? [],
 			metadata: meta.metadata ?? {},
 			source,

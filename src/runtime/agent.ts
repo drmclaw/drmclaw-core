@@ -9,15 +9,42 @@ import type {
 	RuntimeEvent,
 } from "./types.js";
 
-/** Map an adapter-level event to the runtime event vocabulary. */
+/** Map an adapter-level event to the runtime event vocabulary.
+ *  All adapter events originate from the LLM provider → source: "acp". */
 function mapAdapterEvent(event: AdapterEvent): RuntimeEvent {
 	switch (event.type) {
 		case "text":
-			return { type: "stream", delta: event.text };
+			return { source: "acp", type: "stream", delta: event.text };
 		case "tool_call":
-			return { type: "tool_call", tool: event.tool, status: event.status, args: event.args };
+			return {
+				source: "acp",
+				type: "tool_call",
+				tool: event.tool,
+				status: event.status,
+				...(event.kind && { kind: event.kind }),
+				args: event.args,
+				toolCallId: event.toolCallId,
+			};
 		case "tool_result":
-			return { type: "tool_result", tool: event.tool, result: event.result };
+			return {
+				source: "acp",
+				type: "tool_result",
+				tool: event.tool,
+				result: event.result,
+				toolCallId: event.toolCallId,
+			};
+		case "thinking":
+			return { source: "acp", type: "thinking", text: event.text };
+		case "plan":
+			return { source: "acp", type: "plan", entries: event.entries };
+		case "usage":
+			return {
+				source: "acp",
+				type: "usage",
+				used: event.used,
+				size: event.size,
+				...(event.cost && { cost: event.cost }),
+			};
 	}
 }
 
@@ -36,7 +63,7 @@ export class AcpRuntime implements AgentRuntime {
 	async run(options: AcpRuntimeOptions): Promise<TaskResult> {
 		const emit = (event: RuntimeEvent) => options.onEvent?.(event);
 
-		emit({ type: "lifecycle", phase: "start" });
+		emit({ source: "runtime", type: "lifecycle", phase: "start" });
 
 		try {
 			// Use the full system prompt assembled by the runner (includes
@@ -45,21 +72,26 @@ export class AcpRuntime implements AgentRuntime {
 			const systemContext = options.systemContext ?? "";
 
 			const allowedTools = options.policy?.toolAllowlist ?? this.config.llm.allowedTools;
+			const allowedToolKinds =
+				options.policy?.toolKindAllowlist ?? this.config.llm.allowedToolKinds;
+
+			emit({ source: "runtime", type: "lifecycle", phase: "prompt_sent" });
 
 			const result = await this.adapter.run({
 				prompt: options.prompt,
 				systemContext,
 				workingDir: options.workingDir,
 				allowedTools,
+				allowedToolKinds,
 				sessionId: options.sessionId,
 				onEvent: (adapterEvent) => emit(mapAdapterEvent(adapterEvent)),
 			});
 
-			emit({ type: "lifecycle", phase: "end", result });
+			emit({ source: "runtime", type: "lifecycle", phase: "end", result });
 			return result;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			emit({ type: "lifecycle", phase: "error", error: message });
+			emit({ source: "runtime", type: "lifecycle", phase: "error", error: message });
 			return {
 				status: "error",
 				output: "",

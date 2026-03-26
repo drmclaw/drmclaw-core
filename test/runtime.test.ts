@@ -79,7 +79,7 @@ describe("AcpRuntime", () => {
 			onEvent: (e) => events.push(e),
 		});
 
-		expect(events[0]).toEqual({ type: "lifecycle", phase: "start" });
+		expect(events[0]).toEqual({ source: "runtime", type: "lifecycle", phase: "start" });
 		const last = events[events.length - 1];
 		expect(last.type).toBe("lifecycle");
 		expect((last as { phase: string }).phase).toBe("end");
@@ -107,8 +107,8 @@ describe("AcpRuntime", () => {
 
 		const streamEvents = events.filter((e) => e.type === "stream");
 		expect(streamEvents).toEqual([
-			{ type: "stream", delta: "hello " },
-			{ type: "stream", delta: "world" },
+			{ source: "acp", type: "stream", delta: "hello " },
+			{ source: "acp", type: "stream", delta: "world" },
 		]);
 	});
 
@@ -121,8 +121,14 @@ describe("AcpRuntime", () => {
 					tool: "shell(git)",
 					status: "running",
 					args: { cmd: "status" },
+					toolCallId: "tc-42",
 				});
-				opts.onEvent?.({ type: "tool_result", tool: "shell(git)", result: "clean" });
+				opts.onEvent?.({
+					type: "tool_result",
+					tool: "shell(git)",
+					result: "clean",
+					toolCallId: "tc-42",
+				});
 				return { status: "completed" as const, output: "done", durationMs: 10 };
 			}),
 			dispose: vi.fn(async () => {}),
@@ -139,9 +145,150 @@ describe("AcpRuntime", () => {
 
 		const toolEvents = events.filter((e) => e.type === "tool_call" || e.type === "tool_result");
 		expect(toolEvents).toEqual([
-			{ type: "tool_call", tool: "shell(git)", status: "running", args: { cmd: "status" } },
-			{ type: "tool_result", tool: "shell(git)", result: "clean" },
+			{
+				source: "acp",
+				type: "tool_call",
+				tool: "shell(git)",
+				status: "running",
+				args: { cmd: "status" },
+				toolCallId: "tc-42",
+			},
+			{
+				source: "acp",
+				type: "tool_result",
+				tool: "shell(git)",
+				result: "clean",
+				toolCallId: "tc-42",
+			},
 		]);
+	});
+
+	it("propagates kind from adapter tool_call events", async () => {
+		const config = makeConfig();
+		const adapter: LLMAdapter = {
+			run: vi.fn(async (opts: LLMAdapterRunOptions) => {
+				opts.onEvent?.({
+					type: "tool_call",
+					tool: "read_file",
+					status: "pending",
+					kind: "read",
+				});
+				return { status: "completed" as const, output: "", durationMs: 5 };
+			}),
+			dispose: vi.fn(async () => {}),
+		};
+		const runtime = new AcpRuntime(config, adapter);
+		const events: RuntimeEvent[] = [];
+
+		await runtime.run({
+			backend: "acp",
+			prompt: "test",
+			skills: [],
+			onEvent: (e) => events.push(e),
+		});
+
+		const toolCall = events.find((e) => e.type === "tool_call");
+		expect(toolCall).toEqual({
+			source: "acp",
+			type: "tool_call",
+			tool: "read_file",
+			status: "pending",
+			kind: "read",
+		});
+	});
+
+	it("maps adapter thinking events to runtime thinking events", async () => {
+		const config = makeConfig();
+		const adapter: LLMAdapter = {
+			run: vi.fn(async (opts: LLMAdapterRunOptions) => {
+				opts.onEvent?.({ type: "thinking", text: "Let me consider..." });
+				opts.onEvent?.({ type: "text", text: "Here is the answer" });
+				return { status: "completed" as const, output: "Here is the answer", durationMs: 5 };
+			}),
+			dispose: vi.fn(async () => {}),
+		};
+		const runtime = new AcpRuntime(config, adapter);
+		const events: RuntimeEvent[] = [];
+
+		await runtime.run({
+			backend: "acp",
+			prompt: "test",
+			skills: [],
+			onEvent: (e) => events.push(e),
+		});
+
+		const thinking = events.find((e) => e.type === "thinking");
+		expect(thinking).toEqual({ source: "acp", type: "thinking", text: "Let me consider..." });
+	});
+
+	it("maps adapter plan events to runtime plan events", async () => {
+		const config = makeConfig();
+		const adapter: LLMAdapter = {
+			run: vi.fn(async (opts: LLMAdapterRunOptions) => {
+				opts.onEvent?.({
+					type: "plan",
+					entries: [
+						{ content: "Read config", priority: "high", status: "completed" },
+						{ content: "Write tests", priority: "medium", status: "pending" },
+					],
+				});
+				return { status: "completed" as const, output: "", durationMs: 5 };
+			}),
+			dispose: vi.fn(async () => {}),
+		};
+		const runtime = new AcpRuntime(config, adapter);
+		const events: RuntimeEvent[] = [];
+
+		await runtime.run({
+			backend: "acp",
+			prompt: "test",
+			skills: [],
+			onEvent: (e) => events.push(e),
+		});
+
+		const plan = events.find((e) => e.type === "plan");
+		expect(plan).toEqual({
+			source: "acp",
+			type: "plan",
+			entries: [
+				{ content: "Read config", priority: "high", status: "completed" },
+				{ content: "Write tests", priority: "medium", status: "pending" },
+			],
+		});
+	});
+
+	it("maps adapter usage events to runtime usage events", async () => {
+		const config = makeConfig();
+		const adapter: LLMAdapter = {
+			run: vi.fn(async (opts: LLMAdapterRunOptions) => {
+				opts.onEvent?.({
+					type: "usage",
+					used: 50000,
+					size: 200000,
+					cost: { amount: 0.125, currency: "USD" },
+				});
+				return { status: "completed" as const, output: "", durationMs: 5 };
+			}),
+			dispose: vi.fn(async () => {}),
+		};
+		const runtime = new AcpRuntime(config, adapter);
+		const events: RuntimeEvent[] = [];
+
+		await runtime.run({
+			backend: "acp",
+			prompt: "test",
+			skills: [],
+			onEvent: (e) => events.push(e),
+		});
+
+		const usage = events.find((e) => e.type === "usage");
+		expect(usage).toEqual({
+			source: "acp",
+			type: "usage",
+			used: 50000,
+			size: 200000,
+			cost: { amount: 0.125, currency: "USD" },
+		});
 	});
 
 	it("uses policy toolAllowlist over config defaults", async () => {

@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 
 /**
  * Return the subset of `requires` entries not found on the local system.
@@ -8,11 +9,18 @@ export function findMissingRequires(requires: string[]): string[] {
 	return requires.filter((req) => !isCommandAvailable(req));
 }
 
+/**
+ * Check if a command exists on PATH by scanning directories directly.
+ * Avoids spawning `which` (which can trigger enterprise security monitors).
+ */
 function isCommandAvailable(cmd: string): boolean {
-	try {
-		execFileSync("which", [cmd], { stdio: "ignore" });
-		return true;
-	} catch {
-		return false;
-	}
+	const dirs = (process.env.PATH ?? "").split(delimiter);
+	return dirs.some((dir) => {
+		try {
+			accessSync(join(dir, cmd), constants.X_OK);
+			return true;
+		} catch {
+			return false;
+		}
+	});
 }

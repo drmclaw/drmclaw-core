@@ -168,16 +168,21 @@ describe("Bounded-agentic execution", () => {
 				onEvent: (e) => events.push(e),
 			});
 
-			// tool_call(pending) + tool_call(completed) + tool_result for round 1
-			// tool_call(pending) + tool_call(completed) + tool_result for round 2
+			// tool_call(pending) + tool_result + tool_call(completed) for round 1
+			// tool_call(pending) + tool_result + tool_call(completed) for round 2
 			// text
 			expect(events).toEqual([
-				{ type: "tool_call", tool: "list_directory", status: "pending" },
-				{ type: "tool_call", tool: "list_directory", status: "completed" },
-				{ type: "tool_result", tool: "list_directory", result: "README.md\nsrc/" },
-				{ type: "tool_call", tool: "read_file", status: "pending" },
-				{ type: "tool_call", tool: "read_file", status: "completed" },
-				{ type: "tool_result", tool: "read_file", result: "# drmclaw-core" },
+				{ type: "tool_call", tool: "list_directory", status: "pending", toolCallId: "tc-1" },
+				{
+					type: "tool_result",
+					tool: "list_directory",
+					result: "README.md\nsrc/",
+					toolCallId: "tc-1",
+				},
+				{ type: "tool_call", tool: "list_directory", status: "completed", toolCallId: "tc-1" },
+				{ type: "tool_call", tool: "read_file", status: "pending", toolCallId: "tc-2" },
+				{ type: "tool_result", tool: "read_file", result: "# drmclaw-core", toolCallId: "tc-2" },
+				{ type: "tool_call", tool: "read_file", status: "completed", toolCallId: "tc-2" },
 				{ type: "text", text: "Node.js project" },
 			]);
 
@@ -346,12 +351,12 @@ describe("Bounded-agentic execution", () => {
 
 			expect(events).toEqual([
 				// Initial tool_call
-				{ type: "tool_call", tool: "shell", status: "pending" },
+				{ type: "tool_call", tool: "shell", status: "pending", toolCallId: "tc-1" },
 				// in_progress: tool_call event only, no tool_result
-				{ type: "tool_call", tool: "shell", status: "in_progress" },
-				// failed: tool_call + tool_result
-				{ type: "tool_call", tool: "shell", status: "failed" },
-				{ type: "tool_result", tool: "shell", result: "exit code 1" },
+				{ type: "tool_call", tool: "shell", status: "in_progress", toolCallId: "tc-1" },
+				// failed: tool_result first, then tool_call
+				{ type: "tool_result", tool: "shell", result: "exit code 1", toolCallId: "tc-1" },
+				{ type: "tool_call", tool: "shell", status: "failed", toolCallId: "tc-1" },
 			]);
 		});
 
@@ -389,6 +394,227 @@ describe("Bounded-agentic execution", () => {
 				type: "tool_result",
 				tool: "shell",
 				result: contentArray,
+				toolCallId: "tc-1",
+			});
+		});
+
+		it("propagates tool kind from tool_call session updates", async () => {
+			const config = makeConfig();
+			const events: AdapterEvent[] = [];
+
+			const { stubManager } = makeStubSession(async (delegate) => {
+				const su = delegate.current.sessionUpdate;
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "tc-1",
+						title: "list_directory",
+						status: "pending",
+						kind: "search",
+					},
+				});
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "tc-1",
+						status: "completed",
+						rawOutput: "README.md",
+					},
+				});
+			});
+
+			const adapter = new AcpAdapter(config, stubManager);
+			await adapter.run({
+				prompt: "test",
+				sessionId: "s",
+				onEvent: (e) => events.push(e),
+			});
+
+			const pending = events.find((e) => e.type === "tool_call" && e.status === "pending");
+			expect(pending).toEqual({
+				type: "tool_call",
+				tool: "list_directory",
+				status: "pending",
+				kind: "search",
+				toolCallId: "tc-1",
+			});
+
+			// Kind resolved from cache on update (which lacks kind)
+			const completed = events.find((e) => e.type === "tool_call" && e.status === "completed");
+			expect(completed).toEqual({
+				type: "tool_call",
+				tool: "list_directory",
+				status: "completed",
+				kind: "search",
+				toolCallId: "tc-1",
+			});
+		});
+
+		it("omits kind when not provided by the session update", async () => {
+			const config = makeConfig();
+			const events: AdapterEvent[] = [];
+
+			const { stubManager } = makeStubSession(async (delegate) => {
+				const su = delegate.current.sessionUpdate;
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "tc-1",
+						title: "shell",
+						status: "pending",
+					},
+				});
+			});
+
+			const adapter = new AcpAdapter(config, stubManager);
+			await adapter.run({
+				prompt: "test",
+				sessionId: "s",
+				onEvent: (e) => events.push(e),
+			});
+
+			const toolCall = events.find((e) => e.type === "tool_call");
+			expect(toolCall).not.toHaveProperty("kind");
+		});
+
+		it("emits thinking events from agent_thought_chunk updates", async () => {
+			const config = makeConfig();
+			const events: AdapterEvent[] = [];
+
+			const { stubManager } = makeStubSession(async (delegate) => {
+				const su = delegate.current.sessionUpdate;
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "agent_thought_chunk",
+						content: { type: "text", text: "Analyzing the codebase..." },
+					},
+				});
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "agent_thought_chunk",
+						content: { type: "text", text: "Found relevant files." },
+					},
+				});
+			});
+
+			const adapter = new AcpAdapter(config, stubManager);
+			await adapter.run({
+				prompt: "test",
+				sessionId: "s",
+				onEvent: (e) => events.push(e),
+			});
+
+			const thinkingEvents = events.filter((e) => e.type === "thinking");
+			expect(thinkingEvents).toEqual([
+				{ type: "thinking", text: "Analyzing the codebase..." },
+				{ type: "thinking", text: "Found relevant files." },
+			]);
+		});
+
+		it("emits plan events from plan session updates", async () => {
+			const config = makeConfig();
+			const events: AdapterEvent[] = [];
+
+			const { stubManager } = makeStubSession(async (delegate) => {
+				const su = delegate.current.sessionUpdate;
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "plan",
+						entries: [
+							{ content: "Read config file", priority: "high", status: "completed" },
+							{ content: "Run tests", priority: "medium", status: "pending" },
+						],
+					},
+				});
+			});
+
+			const adapter = new AcpAdapter(config, stubManager);
+			await adapter.run({
+				prompt: "test",
+				sessionId: "s",
+				onEvent: (e) => events.push(e),
+			});
+
+			const planEvents = events.filter((e) => e.type === "plan");
+			expect(planEvents).toHaveLength(1);
+			expect(planEvents[0]).toEqual({
+				type: "plan",
+				entries: [
+					{ content: "Read config file", priority: "high", status: "completed" },
+					{ content: "Run tests", priority: "medium", status: "pending" },
+				],
+			});
+		});
+
+		it("emits usage events from usage_update session updates", async () => {
+			const config = makeConfig();
+			const events: AdapterEvent[] = [];
+
+			const { stubManager } = makeStubSession(async (delegate) => {
+				const su = delegate.current.sessionUpdate;
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "usage_update",
+						used: 75000,
+						size: 200000,
+						cost: { amount: 0.25, currency: "USD" },
+					},
+				});
+			});
+
+			const adapter = new AcpAdapter(config, stubManager);
+			await adapter.run({
+				prompt: "test",
+				sessionId: "s",
+				onEvent: (e) => events.push(e),
+			});
+
+			const usageEvents = events.filter((e) => e.type === "usage");
+			expect(usageEvents).toHaveLength(1);
+			expect(usageEvents[0]).toEqual({
+				type: "usage",
+				used: 75000,
+				size: 200000,
+				cost: { amount: 0.25, currency: "USD" },
+			});
+		});
+
+		it("emits usage events without cost when cost is absent", async () => {
+			const config = makeConfig();
+			const events: AdapterEvent[] = [];
+
+			const { stubManager } = makeStubSession(async (delegate) => {
+				const su = delegate.current.sessionUpdate;
+				await su({
+					sessionId: "s",
+					update: {
+						sessionUpdate: "usage_update",
+						used: 10000,
+						size: 128000,
+					},
+				});
+			});
+
+			const adapter = new AcpAdapter(config, stubManager);
+			await adapter.run({
+				prompt: "test",
+				sessionId: "s",
+				onEvent: (e) => events.push(e),
+			});
+
+			const usageEvents = events.filter((e) => e.type === "usage");
+			expect(usageEvents).toHaveLength(1);
+			expect(usageEvents[0]).toEqual({
+				type: "usage",
+				used: 10000,
+				size: 128000,
 			});
 		});
 	});
@@ -527,15 +753,16 @@ describe("Bounded-agentic execution", () => {
 				onEvent: (e) => events.push(e),
 			});
 
-			// start + 2×(tool_call+tool_result) + stream + end = 7
-			expect(events).toHaveLength(7);
-			expect(events[0]).toEqual({ type: "lifecycle", phase: "start" });
-			expect(events[1]).toMatchObject({ type: "tool_call", tool: "list_directory" });
-			expect(events[2]).toMatchObject({ type: "tool_result", tool: "list_directory" });
-			expect(events[3]).toMatchObject({ type: "tool_call", tool: "read_file" });
-			expect(events[4]).toMatchObject({ type: "tool_result", tool: "read_file" });
-			expect(events[5]).toEqual({ type: "stream", delta: "Node.js project" });
-			expect(events[6]).toMatchObject({ type: "lifecycle", phase: "end" });
+			// start + prompt_sent + 2×(tool_call+tool_result) + stream + end = 8
+			expect(events).toHaveLength(8);
+			expect(events[0]).toEqual({ source: "runtime", type: "lifecycle", phase: "start" });
+			expect(events[1]).toEqual({ source: "runtime", type: "lifecycle", phase: "prompt_sent" });
+			expect(events[2]).toMatchObject({ type: "tool_call", tool: "list_directory" });
+			expect(events[3]).toMatchObject({ type: "tool_result", tool: "list_directory" });
+			expect(events[4]).toMatchObject({ type: "tool_call", tool: "read_file" });
+			expect(events[5]).toMatchObject({ type: "tool_result", tool: "read_file" });
+			expect(events[6]).toEqual({ source: "acp", type: "stream", delta: "Node.js project" });
+			expect(events[7]).toMatchObject({ type: "lifecycle", phase: "end" });
 			expect(result.status).toBe("completed");
 		});
 
@@ -629,11 +856,12 @@ describe("Bounded-agentic execution", () => {
 				onEvent: (e) => events.push(e),
 			});
 
-			expect(events).toHaveLength(4);
+			expect(events).toHaveLength(5);
 			expect(events[0]).toMatchObject({ type: "lifecycle", phase: "start" });
-			expect(events[1]).toMatchObject({ type: "tool_call", tool: "list_directory" });
-			expect(events[2]).toMatchObject({ type: "tool_result", tool: "list_directory" });
-			expect(events[3]).toMatchObject({ type: "lifecycle", phase: "error" });
+			expect(events[1]).toMatchObject({ type: "lifecycle", phase: "prompt_sent" });
+			expect(events[2]).toMatchObject({ type: "tool_call", tool: "list_directory" });
+			expect(events[3]).toMatchObject({ type: "tool_result", tool: "list_directory" });
+			expect(events[4]).toMatchObject({ type: "lifecycle", phase: "error" });
 			expect(result.status).toBe("error");
 			expect(result.error).toContain("Connection lost");
 		});
@@ -655,9 +883,10 @@ describe("Bounded-agentic execution", () => {
 				onEvent: (e) => events.push(e),
 			});
 
-			expect(events).toHaveLength(2);
+			expect(events).toHaveLength(3);
 			expect(events[0]).toMatchObject({ type: "lifecycle", phase: "start" });
-			expect(events[1]).toMatchObject({ type: "lifecycle", phase: "error" });
+			expect(events[1]).toMatchObject({ type: "lifecycle", phase: "prompt_sent" });
+			expect(events[2]).toMatchObject({ type: "lifecycle", phase: "error" });
 			expect(result.status).toBe("error");
 			expect(result.error).toContain("Auth expired");
 		});

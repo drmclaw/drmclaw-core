@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DrMClawConfig } from "../config/schema.js";
 import { isCliProvider } from "../config/schema.js";
+import type { EventStore, PersistedRuntimeEvent } from "../events/types.js";
 import type { AgentRuntime } from "../runtime/types.js";
 import type { RuntimeEvent } from "../runtime/types.js";
 import type { SkillEntry } from "../skills/types.js";
@@ -22,6 +23,7 @@ export class TaskRunner {
 	private readonly queue: TaskQueue;
 	private readonly history: TaskRecord[] = [];
 	private readonly maxHistory: number;
+	private eventStore?: EventStore;
 
 	constructor(
 		private readonly config: DrMClawConfig,
@@ -30,6 +32,16 @@ export class TaskRunner {
 	) {
 		this.queue = new TaskQueue(config.server.maxConcurrent);
 		this.maxHistory = config.taskHistory.maxEntries;
+	}
+
+	/** Attach an event store for durable event persistence. */
+	setEventStore(store: EventStore): void {
+		this.eventStore = store;
+	}
+
+	/** Get the attached event store (if any). */
+	getEventStore(): EventStore | undefined {
+		return this.eventStore;
 	}
 
 	/** Set a handler for queue wait notifications (forwarded to WebSocket). */
@@ -47,6 +59,7 @@ export class TaskRunner {
 			sessionId?: string;
 			workingDir?: string;
 			onEvent?: (event: RuntimeEvent) => void;
+			onPersistedEvent?: (event: PersistedRuntimeEvent) => void;
 		},
 	): Promise<TaskRecord> {
 		const taskId = randomUUID();
@@ -63,9 +76,36 @@ export class TaskRunner {
 
 		const startedAt = Date.now();
 		let result: TaskResult;
+		let sequence = 0;
+
+		const persistEvent = async (event: PersistedRuntimeEvent): Promise<void> => {
+			if (this.eventStore) {
+				await this.eventStore.append(taskId, event);
+			}
+			options?.onPersistedEvent?.(event);
+		};
+
+		const makeEvent = (
+			source: PersistedRuntimeEvent["source"],
+			event: PersistedRuntimeEvent["event"],
+		): PersistedRuntimeEvent => ({
+			taskId,
+			sequence: sequence++,
+			timestamp: new Date().toISOString(),
+			source,
+			event,
+		});
+
+		// Persist the user prompt so listTasks() can reconstruct it from disk
+		await persistEvent(makeEvent("system", { type: "task_init", prompt }));
 
 		try {
-			result = await this.executeTask(request, options?.sessionId, options?.onEvent);
+			result = await this.executeTask(request, options?.sessionId, (runtimeEvent) => {
+				const { source, ...eventPayload } = runtimeEvent;
+				const persisted = makeEvent(source, eventPayload as PersistedRuntimeEvent["event"]);
+				persistEvent(persisted);
+				options?.onEvent?.(runtimeEvent);
+			});
 		} catch (error) {
 			result = {
 				status: "error",
@@ -73,6 +113,13 @@ export class TaskRunner {
 				error: error instanceof Error ? error.message : String(error),
 				durationMs: Date.now() - startedAt,
 			};
+			await persistEvent(
+				makeEvent("runtime", {
+					type: "lifecycle",
+					phase: "error",
+					error: result.error ?? "Unknown error",
+				}),
+			);
 		} finally {
 			this.queue.release();
 		}
@@ -107,17 +154,6 @@ export class TaskRunner {
 		const systemContext = await assembleSystemPrompt(this.config, this.skills);
 		const backend = isCliProvider(this.config.llm.provider) ? "acp" : "direct";
 
-		if (backend === "acp") {
-			return this.runtime.run({
-				backend,
-				prompt: request.prompt,
-				systemContext,
-				skills: this.skills,
-				workingDir: request.workingDir,
-				sessionId,
-				onEvent,
-			});
-		}
 		return this.runtime.run({
 			backend,
 			prompt: request.prompt,

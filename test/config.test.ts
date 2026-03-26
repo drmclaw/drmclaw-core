@@ -1,4 +1,8 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveConfigFile } from "../src/config/loader.js";
 import {
 	acpConfigSchema,
 	configSchema,
@@ -18,6 +22,7 @@ describe("configSchema", () => {
 		expect(config.llm.acp.args).toBeUndefined();
 		expect(config.llm.allowedTools).toEqual([]);
 		expect(config.skills.systemDir).toBe("./skills");
+		expect(config.dataDir).toBe(".drmclaw");
 		expect(config.scheduler.enabled).toBe(false);
 		expect(config.taskHistory.maxEntries).toBe(500);
 	});
@@ -146,5 +151,53 @@ describe("defineConfig", () => {
 		const input = { server: { port: 4000 } };
 		const result = defineConfig(input);
 		expect(result).toBe(input);
+	});
+});
+
+describe("resolveConfigFile", () => {
+	function makeTmpDir(): string {
+		return mkdtempSync(join(tmpdir(), "drmclaw-cfg-"));
+	}
+
+	it("returns absolute path when .local.ts exists in cwd", () => {
+		const dir = makeTmpDir();
+		writeFileSync(join(dir, "drmclaw.config.local.ts"), "export default {}");
+		expect(resolveConfigFile(dir)).toBe(join(dir, "drmclaw.config.local.ts"));
+	});
+
+	it("returns absolute path when .local.mjs exists in cwd", () => {
+		const dir = makeTmpDir();
+		writeFileSync(join(dir, "drmclaw.config.local.mjs"), "export default {}");
+		expect(resolveConfigFile(dir)).toBe(join(dir, "drmclaw.config.local.mjs"));
+	});
+
+	it("falls back to package root when cwd has no config", () => {
+		const dir = makeTmpDir();
+		const result = resolveConfigFile(dir);
+		// PACKAGE_ROOT has drmclaw.config.local.ts
+		expect(result).toBeDefined();
+		expect(result?.startsWith(dir)).toBe(false);
+		expect(result).toContain("drmclaw.config.local.ts");
+	});
+
+	it("finds base config in cwd before falling to package root", () => {
+		const dir = makeTmpDir();
+		writeFileSync(join(dir, "drmclaw.config.ts"), "export default {}");
+		// All cwd files (including base) are checked before PACKAGE_ROOT
+		expect(resolveConfigFile(dir)).toBe(join(dir, "drmclaw.config.ts"));
+	});
+
+	it("prefers .local over base config in same directory", () => {
+		const dir = makeTmpDir();
+		writeFileSync(join(dir, "drmclaw.config.ts"), "export default {}");
+		writeFileSync(join(dir, "drmclaw.config.local.ts"), "export default {}");
+		expect(resolveConfigFile(dir)).toBe(join(dir, "drmclaw.config.local.ts"));
+	});
+
+	it("prefers .local.ts over .local.mjs by extension priority", () => {
+		const dir = makeTmpDir();
+		writeFileSync(join(dir, "drmclaw.config.local.ts"), "export default {}");
+		writeFileSync(join(dir, "drmclaw.config.local.mjs"), "export default {}");
+		expect(resolveConfigFile(dir)).toBe(join(dir, "drmclaw.config.local.ts"));
 	});
 });

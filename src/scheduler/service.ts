@@ -15,7 +15,7 @@ export class CronService {
 	private readonly timers: TimerLoop;
 	private runner: TaskRunner | null = null;
 
-	constructor(storePath?: string) {
+	constructor(storePath: string) {
 		this.store = new JobStore(storePath);
 		this.timers = new TimerLoop();
 	}

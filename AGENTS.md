@@ -1,5 +1,7 @@
 # AGENTS.md — drmclaw-core
 
+> **Read this file in full.** Agents must read the entire AGENTS.md content before starting any work in this repo. Do not skim, skip, or summarize sections. Every section contains binding rules.
+
 ## Identity
 
 `drmclaw-core` is a **public, open source** repository.
@@ -23,7 +25,7 @@ This repo contains **only reusable, domain-agnostic** runtime capabilities.
 - Connector SDK and base connectors (WebSocket web connector, connector interface)
 - Scheduler (cron-based job scheduling, timer loop, job store)
 - Task queue (per-user and global lane serialization, concurrency controls)
-- Configuration system (Zod-validated config, `c12` loader)
+- Configuration system (Zod-validated config, native `import()` loader)
 - Audit and event primitives (typed lifecycle events)
 - Storage abstractions (JSON file store, upgradeable to SQLite)
 - Workspace bootstrap file support (`AGENTS.md`, `CONTEXT.md` injection)
@@ -43,54 +45,6 @@ This repo contains **only reusable, domain-agnostic** runtime capabilities.
 
 If a capability is reusable across multiple domains, it belongs here.
 If it is specific to a single business vertical or product, it belongs in a separate product repo that depends on this core via published packages.
-
-## Project Structure
-
-```
-drmclaw-core/
-├── src/
-│   ├── index.ts                # Library entrypoint (side-effect-free)
-│   ├── cli.ts                  # CLI / server bootstrap
-│   ├── config/                 # Zod schema + c12 loader
-│   ├── skills/                 # Skill discovery + SKILL.md parsing
-│   ├── llm/                    # LLM adapter interface + provider adapters
-│   ├── runtime/                # AgentRuntime: bounded execution, policies
-│   ├── runner/                 # Task execution, prompt assembly, queue
-│   ├── scheduler/              # Cron service, timer loop, job store
-│   ├── connectors/             # Connector interface + web connector
-│   └── server/                 # Hono app, REST routes, WebSocket handler
-├── skills/                     # Bundled system skills
-├── ui/                         # Developer console (workspace member, not published separately)
-├── package.json                # Single published package with subpath exports
-├── pnpm-workspace.yaml         # Workspace: root + ui/
-├── tsconfig.json
-├── vitest.config.ts
-└── biome.json
-```
-
-## Tech Stack
-
-- **Language**: TypeScript (strict, ESM)
-- **Runtime**: Node.js 22+
-- **HTTP + WebSocket**: Hono + @hono/node-ws
-- **LLM (MVP)**: ACP over stdio (`@agentclientprotocol/sdk`)
-- **LLM (future)**: Vercel AI SDK Core (`ai`)
-- **Agent runtime**: drmclaw-owned `AgentRuntime` over `ai` (delegates tool-calling loop to `ai` maxSteps for direct providers, ACP for any compatible CLI)
-- **Cron**: croner
-- **Config**: c12
-- **Validation**: Zod
-- **Skill parsing**: gray-matter
-- **Testing**: Vitest
-- **Lint / Format**: Biome
-- **Package manager**: pnpm
-
-## Conventions
-
-- All source code is in `src/` with TypeScript strict mode and ESM modules.
-- Skills use the `SKILL.md` frontmatter format (parsed with `gray-matter`).
-- Configuration files follow the `drmclaw.config.{ts,json}` pattern. Local overrides use `.local` suffix.
-- Tests live next to the code they test or in a top-level `test/` directory.
-- The repo publishes one npm package (`drmclaw-core`) with subpath exports (`drmclaw-core/sdk`, `drmclaw-core/connectors`). `ui/` is a workspace member for development but is not published separately.
 
 ## Agent Guidelines
 
@@ -126,11 +80,12 @@ Before closing any implementation effort, agents **must** perform a self-review 
    7. **Diagnostic cleanliness** — PASS | FINDING: [file:line] [description]
    8. **CI robustness** — PASS | FINDING: [file:line] [description]
    9. **Regression surface** — PASS | FINDING: [file:line] [description]
+   10. **Test ↔ README sync** — PASS | FINDING: [file:line] [description]
 
    **Total findings: N**
    ```
 
-   If all 9 say PASS, that is a valid review. But the review must exist as a visible artifact — not a silent “I checked and it's fine.”
+   If all 10 say PASS, that is a valid review. But the review must exist as a visible artifact — not a silent “I checked and it's fine.”
 
    Check at minimum:
    - **Design fit**: Does the change belong in `drmclaw-core`, stay domain-agnostic, and preserve existing module boundaries?
@@ -141,11 +96,12 @@ Before closing any implementation effort, agents **must** perform a self-review 
      - if both are partially stale, fix both until they agree.
    - **Protocol fidelity**: Do request/response shapes match the upstream SDK or protocol schema exactly? Prefer importing real ACP or SDK types over recreating protocol objects by hand.
    - **Boundary correctness**: Are tests exercising the real seam under discussion? Integration tests should boot the composed app or runtime path, not a re-implemented copy of the logic.
-   - **Test isolation**: Tests must not duplicate production decision logic in local helpers. Import the production function, or construct the real object and call the real method.
+   - **Test isolation**: Tests must not duplicate production decision logic in local helpers. Import the production function, or construct the real object and call the real method. Test inputs must include adversarial shapes that violate the implementation's assumptions — not only idealized sequences that confirm the happy path (see "Happy-path mirror" anti-pattern).
    - **Type coverage**: Are all changed files type-checked? If the root `tsconfig.json` excludes tests, UI, or other changed files, run an additional typecheck or use editor diagnostics so those files are verified too.
    - **Diagnostic cleanliness**: The repo should be clean in the editor. Warnings or schema errors in changed files count as regressions even if `pnpm build` still passes.
    - **CI robustness**: No hardcoded ports, temp paths, clock-sensitive sleeps, race-prone cleanup, or environment assumptions. Prefer OS-assigned resources, deterministic teardown, and explicit timeouts.
    - **Regression surface**: Check adjacent behavior, public exports, config examples, and docs whenever the change touches runtime wiring, package boundaries, or user-facing workflows.
+   - **Test ↔ README sync**: When key test cases are added, removed, or substantially changed — especially new test files, renamed test suites, or shifted coverage areas — verify that `README.md` sections referencing test coverage (e.g., "Real-Provider Tests", test file lists, coverage descriptions) are updated to match. A test suite that `README.md` doesn't mention (or still describes with stale names/counts) is a documentation drift.
 
 3. **Enhance** — Fix every finding from step 2, then re-run the review. Repeat until the review yields zero substantive findings.
 
@@ -156,8 +112,7 @@ These are known failure modes. If you catch yourself doing any of these, stop an
 - **Collapsing Review into CI.** A todo called “Self-review: tests + lint + tsc” is not a review. Running `pnpm test` is the Completion Gate, not the Review. The Review reads code and produces findings.
 - **Skipping the findings list.** If you proceed to Enhance (or to marking the task complete) without emitting the numbered findings block above, the Review did not happen.
 - **“PASS” without reading.** Each criterion requires re-reading the relevant file(s). “PASS” means “I read the file and found no issue,” not “I assume it's fine.”
-- **Batching Review with other todos.** Review is its own task. It is not a sub-bullet of “Implement” or “Run tests.” Create a separate todo for it.
-
+- **Batching Review with other todos.** Review is its own task. It is not a sub-bullet of “Implement” or “Run tests.” Create a separate todo for it.- **Happy-path mirror.** Test data must not be shaped to confirm the algorithm works — it must be shaped to probe where the algorithm breaks. If every test input follows the exact structure the implementation assumes (e.g., contiguous sequences when the real system produces interleaved ones, single-item inputs when production handles batches, synchronous arrival when events race), the tests prove nothing beyond "the code does what the code does." For every behavioral assumption the implementation makes, write at least one test that violates it: out-of-order inputs, interleaved sequences, concurrent/parallel arrivals, missing fields, duplicate entries, and boundary values. Ask: "What real-world input shape would make this algorithm silently wrong?" — then write that test first.
 ### Completion Gate
 
 Do **not** mark the task complete until all of the following are true:
@@ -169,5 +124,6 @@ Do **not** mark the task complete until all of the following are true:
 5. Changed files are warning-free in the editor.
 6. `README.md` and the implementation agree on the shipped behavior, architecture, and public contract.
 7. The final self-review produced a visible findings block with zero unresolved findings.
+8. If key test cases were added, removed, or substantially changed, `README.md` test-related sections have been updated to reflect the current test landscape.
 
 “Build passes” is necessary but insufficient. The bar is: no protocol drift, no hidden diagnostics, no shallow tests, no stale README claims, and no unresolved review concerns.

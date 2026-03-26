@@ -35,6 +35,20 @@ export function createRoutes(
 		return c.json(task);
 	});
 
+	api.get("/tasks/:id/events", async (c) => {
+		const store = runner.getEventStore();
+		if (!store) return c.json({ error: "Event store not available" }, 501);
+		const events = await store.listTaskEvents(c.req.param("id"));
+		return c.json(events);
+	});
+
+	// Persisted task list (survives backend restarts)
+	api.get("/events/tasks", async (c) => {
+		const store = runner.getEventStore();
+		if (!store) return c.json([]);
+		return c.json(await store.listTasks());
+	});
+
 	// ---- Skills ----
 
 	api.get("/skills", (c) => {

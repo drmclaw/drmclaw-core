@@ -19,6 +19,8 @@ export interface SkillEntry {
 	skillMdPath?: string;
 	/** Absolute path to the entrypoint script, if present. */
 	entrypoint?: string;
+	/** Body content from SKILL.md (instructions), if present. */
+	content?: string;
 	/** Additional requirements declared by the skill. */
 	requires: string[];
 	/** Arbitrary metadata from frontmatter. */

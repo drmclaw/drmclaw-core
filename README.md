@@ -60,9 +60,9 @@ It is designed for:
 
 ### Key Components
 
-- **Skill System** — Multi-directory skill discovery with `SKILL.md` frontmatter format. System skills ship with the engine; external skills loaded from configurable paths. Skills can be LLM-interpreted (instructions only) or script-backed (with an `entrypoint`).
-- **LLM Adapter Layer** — Pluggable provider interface with a provider-family configuration model: **CLI providers** (`github-copilot`, `claude-cli`, `openai-cli`, `gemini-cli`) launch an ACP-compatible CLI over stdio; **embedded providers** (`claude`, `openai`, `gemini`) will talk to the upstream API directly (future). The provider ID is the single configuration axis — ACP is an internal transport detail of the CLI-provider path. An `AcpSessionManager` owns process lifecycle, session mapping, and cancellation. The adapter emits structured `AdapterEvent`s (`text`, `tool_call`, `tool_result`) that the runtime maps to `RuntimeEvent`s.
-- **Agent Runtime** — Backend-aware orchestration of skills, tools, policies, and workflow state. In ACP mode, the upstream agent CLI owns the bounded tool-calling loop; drmclaw injects skills via system prompt, forwards supported policy controls, and normalizes lifecycle events. In direct-provider mode, drmclaw owns the bounded tool-calling loop using Vercel AI SDK `generateText` with `maxSteps` and drmclaw-defined tools (skill execution, file ops, etc.).
+- **Skill System** — Multi-directory skill discovery with `SKILL.md` frontmatter format. System skills ship with the engine; external skills loaded from configurable paths. Skills can be LLM-interpreted (instructions only) or script-backed (with an `entrypoint`). Each skill is listed in the system prompt with its name, description, and the absolute path to its `SKILL.md` file. The LLM reads the skill file on demand using its built-in file-reading tool — no custom MCP server or tool registration needed.
+- **LLM Adapter Layer** — Pluggable provider interface with a provider-family configuration model: **CLI providers** (`github-copilot`, `claude-cli`, `openai-cli`, `gemini-cli`) launch an ACP-compatible CLI over stdio; **embedded providers** (`claude`, `openai`, `gemini`) will talk to the upstream API directly (future). The provider ID is the single configuration axis — ACP is an internal transport detail of the CLI-provider path. An `AcpSessionManager` owns process lifecycle, session mapping, and cancellation. The adapter emits structured `AdapterEvent`s (`text`, `tool_call`, `tool_result`, `thinking`, `plan`, `usage`) that the runtime maps to `RuntimeEvent`s.
+- **Agent Runtime** — Backend-aware orchestration of skills, tools, policies, and workflow state. In ACP mode, the upstream agent CLI owns the bounded tool-calling loop; drmclaw lists skills with file paths in the system prompt so the agent reads them on demand, forwards supported policy controls, and normalizes lifecycle events. In direct-provider mode, drmclaw owns the bounded tool-calling loop using Vercel AI SDK `generateText` with `maxSteps` and drmclaw-defined tools (skill execution, file ops, etc.).
 - **Task Runner** — Orchestrates each task run: assembles structured system prompts (Tooling → Safety → Skills → Workspace → Runtime → Time), selects the appropriate AgentRuntime backend (ACP or direct-provider), invokes it, collects lifecycle events, and returns structured results. The task runner does not run the tool-calling loop itself — that is the AgentRuntime's responsibility.
 - **Task Queue** — Per-user and global lane serialization with configurable concurrency caps. Prevents session races and upstream rate limits.
 - **Scheduler** — Cron-based job scheduling using `croner`. Jobs stored in JSON with atomic writes. Supports missed-job detection, concurrency limits, and timezone awareness.
@@ -100,7 +100,7 @@ The public core includes:
 | LLM (future) | Vercel AI SDK Core (`ai`) | Mainstream multi-provider abstraction |
 | Agent runtime | drmclaw-owned `AgentRuntime` over `ai` | Skills/policy orchestration; direct providers use drmclaw-owned `maxSteps`, ACP providers delegate the bounded loop to the upstream CLI |
 | Cron | croner | Timezone-aware, well-maintained |
-| Config | c12 | Supports .ts/.json/.yaml, env vars |
+| Config | Native `import()` | Zero-dep loader; .ts files work under tsx, .mjs natively |
 | Validation | Zod | Industry standard TypeScript validation |
 | Skill parsing | gray-matter | Standard YAML frontmatter parser |
 | Testing | Vitest | Fast, Vite-compatible |
@@ -109,13 +109,14 @@ The public core includes:
 
 ## Configuration
 
-`drmclaw-core` uses a file-based config system loaded via `c12`. Configuration can live in `drmclaw.config.ts`, `drmclaw.config.json`, or environment variables.
+`drmclaw-core` uses a file-based config system loaded via native `import()`. Configuration lives in `drmclaw.config.ts` (requires a TS loader such as `tsx`) or `drmclaw.config.mjs` (works natively). A `.local` variant (e.g. `drmclaw.config.local.ts`) takes precedence and is gitignored for per-developer overrides.
 
 Key config areas:
 
 - **`server`** — Port, max concurrent tasks, dev console path.
 - **`skills`** — System skill directory and external skill directory paths.
-- **`llm`** — Provider selection, nested ACP config for CLI providers, API keys, tool allowlist, retry policy, failover chain.
+- **`llm`** — Provider selection, nested ACP config for CLI providers, API keys, tool allowlist, tool-kind allowlist, retry policy, failover chain.
+- **`dataDir`** — Directory for runtime data (event logs, job store). Defaults to `.drmclaw`.
 
 ### Provider Model
 
@@ -165,12 +166,13 @@ Execution policies are split by backend so each runtime path only exposes contro
 
 **CommonExecutionPolicy** — cross-backend fields semantically valid for both ACP and direct-provider runtimes:
 
-| Field              | Type       | Purpose                                   |
-| ------------------ | ---------- | ----------------------------------------- |
-| `toolAllowlist`    | `string[]` | Tool names the agent may invoke            |
-| `skillAllowlist`   | `string[]` | Skill names the agent may use              |
-| `filePatterns`     | `string[]` | File path patterns for read/write access   |
-| `commandAllowlist` | `string[]` | Shell commands allowed for execution       |
+| Field                | Type       | Purpose                                     |
+| -------------------- | ---------- | ------------------------------------------- |
+| `toolAllowlist`      | `string[]` | Tool names the agent may invoke              |
+| `toolKindAllowlist`  | `string[]` | Tool kinds (e.g. `"read"`, `"execute"`) allowed. Empty = all |
+| `skillAllowlist`     | `string[]` | Skill names the agent may use                |
+| `filePatterns`       | `string[]` | File path patterns for read/write access     |
+| `commandAllowlist`   | `string[]` | Shell commands allowed for execution         |
 
 **PlainExecutionPolicy** — `CommonExecutionPolicy & { backend?: never; maxSteps?: never }`. Used as the policy slot type in backend-specific runtime options so that a `DirectExecutionPolicy` variable (with `backend: "direct"` and `maxSteps`) cannot be structurally assigned into the ACP path, and vice versa.
 
@@ -192,9 +194,27 @@ Multiple user prompts on the same conversation share a stable `sessionId`, so `A
 
 Bounded agentic execution (internal multi-round tool-calling loops) is upstream-owned by the provider CLI in ACP mode. drmclaw injects skills, forwards policy controls, and normalizes the resulting event stream.
 
-### Real-Provider Tests
+### Test Suite
 
-`test/real-provider-agentic.test.ts` contains lightweight smoke tests that exercise the full drmclaw → ACP → real provider CLI pipeline. Run with `pnpm test:real`. Defaults to `github-copilot`; set `DRMCLAW_REAL_PROVIDER` to override. Coverage: prompt round-trip, tool use, session reuse (PID identity), and skill injection. Protocol-level seam behavior (event translation, session lifecycle) is covered by the fast mocked suite (`bounded-agentic.test.ts`, `acp-session.test.ts`, `runner.test.ts`, `runtime.test.ts`).
+All tests run via `pnpm test` with no external dependencies (no real LLM provider needed):
+
+| Test file | Coverage area |
+|---|---|
+| `bounded-agentic.test.ts` | Event translation, bounded tool-calling loop, adapter events |
+| `acp-session.test.ts` | ACP session lifecycle, process spawn/reuse, PID identity, delegate swap |
+| `acp-permission.test.ts` | Three-layer permission control: config allowlist, runtime policy override, `onToolCall` callback, adapter wiring, kind-based filtering, edge cases |
+| `acp-subprocess.test.ts` | ACP subprocess management |
+| `session-continuity.test.ts` | Session reuse across multiple prompts |
+| `runner.test.ts` | Task runner orchestration, system prompt assembly |
+| `runtime.test.ts` | AgentRuntime backend selection, policy forwarding, skill injection |
+| `config.test.ts` | Zod-validated config, provider resolution, `.local` config file discovery |
+| `skills-loader.test.ts` | Skill discovery, path containment, bounded scan |
+| `skills-prompt.test.ts` | Skill prompt formatting for system prompt |
+| `executor.test.ts` | Task execution and queue integration |
+| `integration.test.ts` | End-to-end composed runtime paths, prompt round-trip |
+| `entrypoint.test.ts` | Package exports and entry points |
+| `event-store.test.ts` | JSONL event store, persistence, WebSocket broadcasting |
+| `debug-display-utils.test.ts` | Developer console display grouping: stream/thinking collapse, toolCallId-based tool-call grouping, interleaved parallel tool events |
 
 ### Skills Hardening
 
@@ -221,7 +241,7 @@ drmclaw-core/
 ├── src/
 │   ├── index.ts                # Library entrypoint (side-effect-free)
 │   ├── cli.ts                  # CLI / server bootstrap
-│   ├── config/                 # Zod schema + c12 loader
+│   ├── config/                 # Zod schema + native config loader
 │   ├── skills/                 # Multi-directory skill discovery + SKILL.md parsing
 │   ├── llm/                    # LLM adapter interface + ACP adapter
 │   ├── runtime/                # Agent runtime: orchestration, policies
@@ -238,6 +258,14 @@ drmclaw-core/
 ├── biome.json
 └── drmclaw.config.example.ts   # Example configuration
 ```
+
+## Conventions
+
+- All source code is in `src/` with TypeScript strict mode and ESM modules.
+- Skills use the `SKILL.md` frontmatter format (parsed with `gray-matter`).
+- Configuration files follow the `drmclaw.config.{ts,json}` pattern. Local overrides use `.local` suffix (gitignored by default).
+- Tests live next to the code they test or in a top-level `test/` directory.
+- The repo publishes one npm package (`drmclaw-core`) with subpath exports (`drmclaw-core/sdk`, `drmclaw-core/connectors`). `ui/` is a workspace member for development but is not published separately.
 
 ## Design Philosophy
 
@@ -284,11 +312,15 @@ pnpm install
 # Copy and edit config
 cp drmclaw.config.example.ts drmclaw.config.ts
 
-# Start in development mode
+# Start in development mode (backend + UI dev server)
 pnpm dev
 ```
 
-The server starts on port 3000 by default. The bundled developer console (chat, task viewer, skill list, job management) is served at the root path. This is an operator/self-host admin surface — product-level UIs are built in separate product repos.
+`pnpm dev` starts both the backend server (port 3000) and the Vite UI dev server (port 5173) concurrently. Open `http://localhost:5173` for the developer console with live reload. The Vite dev server proxies API and WebSocket requests to the backend.
+
+For production, build the UI first (`pnpm --filter drmclaw-ui build`), then run `pnpm start` — the backend serves the built UI from `ui/dist` at port 3000.
+
+The developer console is a 2-column debug view: **User Chat** (left — conversation with the assistant) and **Events** (right — unified timeline of all runtime events in sequence order). The Events column shows lifecycle transitions, tool call requests, tool results, LLM stream deltas, thinking chunks, execution plans, and token usage in a single chronological timeline with color-coded source badges (`system`, `runtime`, `acp`). Tool-call rounds are grouped with numbered headers and tinted backgrounds; consecutive stream chunks and thinking fragments are collapsed into expandable groups. Events are persisted to `.drmclaw/events/tasks/` as JSONL and replayed on page load. This is an operator/self-host admin surface — product-level UIs are built in separate product repos.
 
 ### Prerequisites
 

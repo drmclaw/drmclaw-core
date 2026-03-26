@@ -64,6 +64,45 @@ describe("AcpSessionManager.acquire — delegate swap", () => {
 		expect(session.clientDelegate.current).toBe(newClient);
 	});
 
+	it("reused session returns the same process object (PID identity)", async () => {
+		const manager = new AcpSessionManager();
+
+		const client: acp.Client = {
+			requestPermission: vi.fn(async () => ({ outcome: { outcome: "cancelled" as const } })),
+			sessionUpdate: vi.fn(async () => {}),
+		};
+
+		const session = makeFakeSession(client);
+		seedSession(manager, "pid-check", session);
+
+		const firstAcquire = await manager.acquire(
+			"pid-check",
+			"github-copilot",
+			{ githubCopilot: {} },
+			client,
+		);
+		const processBefore = firstAcquire.process;
+
+		// Second acquire with a different client — same session key
+		const newClient: acp.Client = {
+			requestPermission: vi.fn(async () => ({
+				outcome: { outcome: "selected" as const, optionId: "a" },
+			})),
+			sessionUpdate: vi.fn(async () => {}),
+		};
+
+		const secondAcquire = await manager.acquire(
+			"pid-check",
+			"github-copilot",
+			{ githubCopilot: {} },
+			newClient,
+		);
+
+		// Same session, same process — no new spawn
+		expect(secondAcquire).toBe(firstAcquire);
+		expect(secondAcquire.process).toBe(processBefore);
+	});
+
 	it("connection dispatches through swapped delegate", async () => {
 		const manager = new AcpSessionManager();
 

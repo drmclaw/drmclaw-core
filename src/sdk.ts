@@ -26,6 +26,7 @@ export type {
 	ExecutionPolicy,
 	PlainExecutionPolicy,
 	RuntimeEvent,
+	RuntimeEventSource,
 } from "./runtime/types.js";
 
 // Task types
