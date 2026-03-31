@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createNodeWebSocket } from "@hono/node-ws";
 import { Hono } from "hono";
+import type { DrMClawConfig } from "../config/schema.js";
 import type { WebConnector } from "../connectors/web.js";
+import type { LLMAdapter } from "../llm/adapter.js";
 import { PACKAGE_ROOT } from "../paths.js";
 import type { TaskRunner } from "../runner/runner.js";
 import type { CronService } from "../scheduler/service.js";
@@ -23,12 +25,17 @@ export function createApp(
 	scheduler: CronService,
 	skills: SkillEntry[],
 	webConnector: WebConnector,
+	config: DrMClawConfig,
+	adapter: LLMAdapter,
+	options?: { isReady?: () => boolean },
 ): AppWithWebSocket {
 	const app = new Hono();
 	const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
 
 	// Mount REST API routes under /api
-	const routes = createRoutes(runner, scheduler, skills);
+	const routes = createRoutes(runner, scheduler, skills, config, adapter, {
+		isReady: options?.isReady,
+	});
 	app.route("/api", routes);
 
 	// WebSocket endpoint for developer console
@@ -64,8 +71,9 @@ export function createApp(
 		}),
 	);
 
-	// Serve developer console static files in production
-	// In dev, the Vite dev server handles this with a proxy
+	// Serve developer console static files in production.
+	// In dev, the esbuild/Tailwind dev server (ui/scripts/dev.mjs) proxies
+	// /api and /ws to this backend and serves built assets directly.
 	// Static files are package-internal assets — anchor to PACKAGE_ROOT
 	// so they serve correctly regardless of the server's working directory.
 	app.use("/*", serveStatic({ root: join(PACKAGE_ROOT, "ui/dist") }));

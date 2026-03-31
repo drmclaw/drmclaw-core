@@ -291,8 +291,8 @@ describe("AcpRuntime", () => {
 		});
 	});
 
-	it("uses policy toolAllowlist over config defaults", async () => {
-		const config = makeConfig({ llm: { allowedTools: ["default-tool"] } });
+	it("uses policy permissionMode over config defaults", async () => {
+		const config = makeConfig({ llm: { permissionMode: "deny-all" } });
 		const adapter = makeMockAdapter();
 		const runtime = new AcpRuntime(config, adapter);
 
@@ -300,11 +300,11 @@ describe("AcpRuntime", () => {
 			backend: "acp",
 			prompt: "test",
 			skills: [],
-			policy: { toolAllowlist: ["custom-tool"] },
+			policy: { permissionMode: "approve-all" },
 		});
 
 		const adapterCall = vi.mocked(adapter.run).mock.calls[0][0];
-		expect(adapterCall.allowedTools).toEqual(["custom-tool"]);
+		expect(adapterCall.permissionMode).toBe("approve-all");
 	});
 
 	it("passes sessionId through to adapter", async () => {

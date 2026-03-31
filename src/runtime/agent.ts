@@ -71,9 +71,7 @@ export class AcpRuntime implements AgentRuntime {
 			// Falls back to empty string if not provided.
 			const systemContext = options.systemContext ?? "";
 
-			const allowedTools = options.policy?.toolAllowlist ?? this.config.llm.allowedTools;
-			const allowedToolKinds =
-				options.policy?.toolKindAllowlist ?? this.config.llm.allowedToolKinds;
+			const permissionMode = options.policy?.permissionMode ?? this.config.llm.permissionMode;
 
 			emit({ source: "runtime", type: "lifecycle", phase: "prompt_sent" });
 
@@ -81,8 +79,7 @@ export class AcpRuntime implements AgentRuntime {
 				prompt: options.prompt,
 				systemContext,
 				workingDir: options.workingDir,
-				allowedTools,
-				allowedToolKinds,
+				permissionMode,
 				sessionId: options.sessionId,
 				onEvent: (adapterEvent) => emit(mapAdapterEvent(adapterEvent)),
 			});

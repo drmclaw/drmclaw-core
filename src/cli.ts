@@ -13,12 +13,25 @@ import { handleSkillsCommand } from "./skills/cli.js";
 import { loadSkills } from "./skills/loader.js";
 
 async function main() {
+	// 0. Global safety nets — log and survive stray rejections; crash on truly fatal exceptions
+	process.on("unhandledRejection", (reason) => {
+		console.error("[drmclaw] Unhandled rejection:", reason);
+	});
+	process.on("uncaughtException", (err) => {
+		console.error("[drmclaw] Uncaught exception — exiting:", err);
+		process.exit(1);
+	});
+
 	// 1. Load and validate config
 	const config = await loadDrMClawConfig();
 	const providerKind = isCliProvider(config.llm.provider) ? "cli" : "embedded";
 	console.log(`[drmclaw] Config loaded (provider: ${config.llm.provider}, ${providerKind})`);
 	if (isCliProvider(config.llm.provider)) {
-		const { command, args } = resolveAcpCommandArgs(config.llm.provider, config.llm.acp);
+		const { command, args } = resolveAcpCommandArgs(
+			config.llm.provider,
+			config.llm.acp,
+			config.llm.model,
+		);
 		console.log(`[drmclaw] ACP: ${command} ${args.join(" ")}`);
 	}
 
@@ -51,21 +64,25 @@ async function main() {
 
 	// Wire web connector to task runner
 	webConnector.onMessage(async (msg) => {
-		const record = await runner.run(msg.content, {
-			userId: msg.userId,
-			sessionId: msg.sessionId,
-			onPersistedEvent: (event) => {
-				webConnector.broadcast({
-					type: "event",
-					taskId: event.taskId,
-					sequence: event.sequence,
-					timestamp: event.timestamp,
-					source: event.source,
-					event: event.event,
-				});
-			},
-		});
-		await webConnector.sendTaskStatus(record.id, record.result);
+		try {
+			const record = await runner.run(msg.content, {
+				userId: msg.userId,
+				sessionId: msg.sessionId,
+				onPersistedEvent: (event) => {
+					webConnector.broadcast({
+						type: "event",
+						taskId: event.taskId,
+						sequence: event.sequence,
+						timestamp: event.timestamp,
+						source: event.source,
+						event: event.event,
+					});
+				},
+			});
+			await webConnector.sendTaskStatus(record.id, record.result);
+		} catch (err) {
+			console.error("[drmclaw] WebSocket message handler error:", err);
+		}
 	});
 
 	// Wire queue notices to WebSocket
@@ -73,15 +90,63 @@ async function main() {
 		webConnector.broadcast({ type: "queue_notice", taskId, position });
 	});
 
-	// 8. Create and start HTTP server with WebSocket support
-	const { app, injectWebSocket } = createApp(runner, scheduler, skills, webConnector);
+	// 8. Eagerly discover available models so the dropdown is populated on first load
+	if (adapter.discoverModels) {
+		adapter
+			.discoverModels()
+			.then((models) => {
+				if (models.length > 0) {
+					console.log(`[drmclaw] Discovered ${models.length} model(s) from agent`);
+				}
+			})
+			.catch(() => {
+				// Non-fatal — dropdown will be empty until first session
+			});
+	}
+
+	// 9. Create and start HTTP server with WebSocket support
+	let serverReady = false;
+	const { app, injectWebSocket } = createApp(
+		runner,
+		scheduler,
+		skills,
+		webConnector,
+		config,
+		adapter,
+		{ isReady: () => serverReady },
+	);
 	const port = config.server.port;
 
 	const server = serve({ fetch: app.fetch, port }, () => {
+		serverReady = true;
 		console.log(`[drmclaw] Server listening on http://localhost:${port}`);
 	});
 
 	injectWebSocket(server);
+
+	// Graceful shutdown: stop accepting tasks, drain in-flight work, then exit.
+	let shuttingDown = false;
+	const shutdown = async (signal: string): Promise<void> => {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		console.log(`[drmclaw] ${signal} received — draining in-flight tasks…`);
+
+		try {
+			await runner.drain();
+			console.log("[drmclaw] All tasks drained. Shutting down.");
+		} catch (err) {
+			console.error("[drmclaw] Error during drain:", err);
+		}
+
+		server.close(() => process.exit(0));
+		// Force exit after 30s if drain hangs
+		setTimeout(() => {
+			console.error("[drmclaw] Forced exit after timeout.");
+			process.exit(1);
+		}, 30_000).unref();
+	};
+	process.on("SIGINT", () => shutdown("SIGINT"));
+	process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 const args = process.argv.slice(2);

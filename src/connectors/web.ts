@@ -37,22 +37,34 @@ export class WebConnector implements Connector {
 	async sendMessage(to: string, content: string): Promise<void> {
 		const ws = this.clients.get(to);
 		if (ws) {
-			ws.send(JSON.stringify({ type: "stream", delta: content }));
+			try {
+				ws.send(JSON.stringify({ type: "stream", delta: content }));
+			} catch {
+				this.clients.delete(to);
+			}
 		}
 	}
 
 	async sendTaskStatus(taskId: string, status: TaskResult): Promise<void> {
 		const message = JSON.stringify({ type: "result", taskId, task: status });
-		for (const ws of this.clients.values()) {
-			ws.send(message);
+		for (const [id, ws] of this.clients) {
+			try {
+				ws.send(message);
+			} catch {
+				this.clients.delete(id);
+			}
 		}
 	}
 
 	/** Broadcast a message to all connected clients. */
 	broadcast(data: unknown): void {
 		const message = JSON.stringify(data);
-		for (const ws of this.clients.values()) {
-			ws.send(message);
+		for (const [id, ws] of this.clients) {
+			try {
+				ws.send(message);
+			} catch {
+				this.clients.delete(id);
+			}
 		}
 	}
 }

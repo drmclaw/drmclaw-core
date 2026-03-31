@@ -24,6 +24,9 @@ export type AdapterEvent =
 			cost?: { amount: number; currency: string } | null;
 	  };
 
+/** Permission mode for tool-call approval. */
+export type PermissionMode = "approve-all" | "approve-reads" | "deny-all";
+
 /** Options for a single LLM adapter run. */
 export interface LLMAdapterRunOptions {
 	/** User prompt text. */
@@ -32,13 +35,11 @@ export interface LLMAdapterRunOptions {
 	systemContext?: string;
 	/** Working directory for tool execution. */
 	workingDir?: string;
-	/** Tool allowlist for auto-approval. */
-	allowedTools?: string[];
-	/** Tool-kind allowlist for auto-approval. Empty = allow all kinds. */
-	allowedToolKinds?: string[];
+	/** Permission mode for tool-call approval (default: approve-reads). */
+	permissionMode?: PermissionMode;
 	/** Structured event callback for text, tool calls, and tool results. */
 	onEvent?: (event: AdapterEvent) => void;
-	/** Tool-call approval callback. */
+	/** Tool-call approval callback — if set, overrides permissionMode. */
 	onToolCall?: (tool: string, args: unknown) => Promise<"approved" | "denied">;
 	/** ACP session ID to resume (if the session manager provides one). */
 	sessionId?: string;
@@ -53,4 +54,10 @@ export interface LLMAdapterRunOptions {
 export interface LLMAdapter {
 	run(options: LLMAdapterRunOptions): Promise<TaskResult>;
 	dispose(): Promise<void>;
+	/** Update the model for subsequent runs (tears down cached sessions). */
+	setModel?(model: string): Promise<void>;
+	/** Return models discovered from the agent (may be empty before first session). */
+	getAvailableModels?(): Array<{ id: string; name: string }>;
+	/** Eagerly discover available models from the agent. */
+	discoverModels?(): Promise<Array<{ id: string; name: string }>>;
 }

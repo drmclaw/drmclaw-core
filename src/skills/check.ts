@@ -1,4 +1,4 @@
-import { accessSync, constants } from "node:fs";
+import { constants, accessSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 /**

@@ -99,7 +99,7 @@ describe("JsonlEventStore", () => {
 		const lines = content.trim().split("\n");
 		expect(lines).toHaveLength(2);
 
-		const parsed = JSON.parse(lines[0]!);
+		const parsed = JSON.parse(lines[0] ?? "");
 		expect(parsed.taskId).toBe(taskId);
 		expect(parsed.sequence).toBe(0);
 	});

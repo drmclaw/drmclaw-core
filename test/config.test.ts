@@ -20,7 +20,7 @@ describe("configSchema", () => {
 		expect(config.llm.provider).toBe("github-copilot");
 		expect(config.llm.acp.command).toBeUndefined();
 		expect(config.llm.acp.args).toBeUndefined();
-		expect(config.llm.allowedTools).toEqual([]);
+		expect(config.llm.permissionMode).toBe("approve-all");
 		expect(config.skills.systemDir).toBe("./skills");
 		expect(config.dataDir).toBe(".drmclaw");
 		expect(config.scheduler.enabled).toBe(false);
@@ -75,12 +75,89 @@ describe("configSchema", () => {
 			expect(isCliProvider(config.llm.provider)).toBe(false);
 		}
 	});
+
+	it("accepts llm.model as optional string", () => {
+		const config = configSchema.parse({ llm: { model: "claude-sonnet-4" } });
+		expect(config.llm.model).toBe("claude-sonnet-4");
+	});
+
+	it("defaults llm.model to undefined", () => {
+		const config = configSchema.parse({});
+		expect(config.llm.model).toBeUndefined();
+	});
+
+	it("strips unknown keys from githubCopilot", () => {
+		const config = configSchema.parse({
+			llm: { acp: { githubCopilot: { defaultModel: "gpt-5.4" } } },
+		});
+		expect(config.llm.acp.githubCopilot.defaultModel).toBe("gpt-5.4");
+	});
+
+	it("defaults mcpServers to empty array", () => {
+		const config = configSchema.parse({});
+		expect(config.llm.acp.mcpServers).toEqual([]);
+	});
+
+	it("parses mcpServers with full fields", () => {
+		const config = configSchema.parse({
+			llm: {
+				acp: {
+					mcpServers: [
+						{
+							name: "filesystem",
+							command: "npx",
+							args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+							env: { HOME: "/home/ci" },
+						},
+					],
+				},
+			},
+		});
+		expect(config.llm.acp.mcpServers).toHaveLength(1);
+		expect(config.llm.acp.mcpServers[0].name).toBe("filesystem");
+		expect(config.llm.acp.mcpServers[0].command).toBe("npx");
+		expect(config.llm.acp.mcpServers[0].args).toEqual([
+			"-y",
+			"@modelcontextprotocol/server-filesystem",
+			"/tmp",
+		]);
+		expect(config.llm.acp.mcpServers[0].env).toEqual({ HOME: "/home/ci" });
+	});
+
+	it("defaults mcpServer args and env when omitted", () => {
+		const config = configSchema.parse({
+			llm: {
+				acp: {
+					mcpServers: [{ name: "simple", command: "my-server" }],
+				},
+			},
+		});
+		expect(config.llm.acp.mcpServers[0].args).toEqual([]);
+		expect(config.llm.acp.mcpServers[0].env).toEqual({});
+	});
+
+	it("rejects mcpServers entry missing required name", () => {
+		expect(() =>
+			configSchema.parse({
+				llm: { acp: { mcpServers: [{ command: "foo" }] } },
+			}),
+		).toThrow();
+	});
+
+	it("rejects mcpServers entry missing required command", () => {
+		expect(() =>
+			configSchema.parse({
+				llm: { acp: { mcpServers: [{ name: "foo" }] } },
+			}),
+		).toThrow();
+	});
 });
 
 describe("resolveAcpCommandArgs", () => {
 	it("defaults to copilot --acp --stdio for github-copilot", () => {
 		const { command, args } = resolveAcpCommandArgs("github-copilot", {
 			githubCopilot: {},
+			mcpServers: [],
 		});
 		expect(command).toBe("copilot");
 		expect(args).toEqual(["--acp", "--stdio"]);
@@ -89,6 +166,7 @@ describe("resolveAcpCommandArgs", () => {
 	it("appends --model when githubCopilot.defaultModel is set", () => {
 		const { command, args } = resolveAcpCommandArgs("github-copilot", {
 			githubCopilot: { defaultModel: "gpt-5.4" },
+			mcpServers: [],
 		});
 		expect(command).toBe("copilot");
 		expect(args).toEqual(["--acp", "--stdio", "--model", "gpt-5.4"]);
@@ -98,6 +176,7 @@ describe("resolveAcpCommandArgs", () => {
 		const { args } = resolveAcpCommandArgs("github-copilot", {
 			args: ["--acp", "--stdio", "--model", "custom-model"],
 			githubCopilot: { defaultModel: "gpt-5.4" },
+			mcpServers: [],
 		});
 		expect(args).toEqual(["--acp", "--stdio", "--model", "custom-model"]);
 	});
@@ -107,25 +186,35 @@ describe("resolveAcpCommandArgs", () => {
 			command: "gh-copilot",
 			args: ["--custom-flag"],
 			githubCopilot: {},
+			mcpServers: [],
 		});
 		expect(command).toBe("gh-copilot");
 		expect(args).toEqual(["--custom-flag"]);
 	});
 
 	it("uses correct default commands for CLI providers", () => {
-		const { command: cmd1 } = resolveAcpCommandArgs("claude-cli", { githubCopilot: {} });
+		const { command: cmd1 } = resolveAcpCommandArgs("claude-cli", {
+			githubCopilot: {},
+			mcpServers: [],
+		});
 		expect(cmd1).toBe("claude");
 
-		const { command: cmd2 } = resolveAcpCommandArgs("openai-cli", { githubCopilot: {} });
+		const { command: cmd2 } = resolveAcpCommandArgs("openai-cli", {
+			githubCopilot: {},
+			mcpServers: [],
+		});
 		expect(cmd2).toBe("openai");
 
-		const { command: cmd3 } = resolveAcpCommandArgs("gemini-cli", { githubCopilot: {} });
+		const { command: cmd3 } = resolveAcpCommandArgs("gemini-cli", {
+			githubCopilot: {},
+			mcpServers: [],
+		});
 		expect(cmd3).toBe("gemini");
 	});
 
 	it("uses --acp --stdio as default args for non-copilot CLI providers", () => {
 		for (const provider of ["claude-cli", "openai-cli", "gemini-cli"] as const) {
-			const { args } = resolveAcpCommandArgs(provider, { githubCopilot: {} });
+			const { args } = resolveAcpCommandArgs(provider, { githubCopilot: {}, mcpServers: [] });
 			expect(args).toEqual(["--acp", "--stdio"]);
 		}
 	});
@@ -143,6 +232,33 @@ describe("resolveAcpCommandArgs", () => {
 		});
 		const { command, args } = resolveAcpCommandArgs("github-copilot", parsed);
 		expect(args).toEqual(["--acp", "--stdio", "--model", "gpt-5.4"]);
+	});
+
+	it("modelOverride takes precedence over githubCopilot.defaultModel", () => {
+		const { args } = resolveAcpCommandArgs(
+			"github-copilot",
+			{ githubCopilot: { defaultModel: "gpt-5.4" }, mcpServers: [] },
+			"claude-sonnet-4",
+		);
+		expect(args).toEqual(["--acp", "--stdio", "--model", "claude-sonnet-4"]);
+	});
+
+	it("modelOverride works for non-copilot CLI providers", () => {
+		const { args } = resolveAcpCommandArgs(
+			"claude-cli",
+			{ githubCopilot: {}, mcpServers: [] },
+			"claude-sonnet-4",
+		);
+		expect(args).toEqual(["--acp", "--stdio", "--model", "claude-sonnet-4"]);
+	});
+
+	it("modelOverride is ignored when --model already in explicit args", () => {
+		const { args } = resolveAcpCommandArgs(
+			"github-copilot",
+			{ args: ["--acp", "--stdio", "--model", "pinned"], githubCopilot: {}, mcpServers: [] },
+			"override-attempt",
+		);
+		expect(args).toEqual(["--acp", "--stdio", "--model", "pinned"]);
 	});
 });
 

@@ -623,15 +623,15 @@ describe("Bounded-agentic execution", () => {
 	// 2. Policy-enforced tool refusal (real boundedness)
 	// ------------------------------------------------------------------
 	describe("policy-enforced tool refusal", () => {
-		it("denies a non-allowlisted tool via evaluatePermission", async () => {
-			const config = makeConfig({ llm: { allowedTools: [] } });
+		it("denies an unsafe tool in approve-reads mode", async () => {
+			const config = makeConfig({ llm: { permissionMode: "approve-reads" } });
 			const permissionOutcomes: string[] = [];
 
 			const { stubManager } = makeStubSession(async (delegate) => {
-				// ACP server requests permission for "shell(rm)"
+				// ACP server requests permission for "shell(rm)" (execute kind)
 				const response = await delegate.current.requestPermission({
 					sessionId: "s",
-					toolCall: { toolCallId: "c", title: "shell(rm)", status: "pending" },
+					toolCall: { toolCallId: "c", title: "shell(rm)", status: "pending", kind: "execute" },
 					options: [
 						{ optionId: "allow", name: "Allow", kind: "allow_once" },
 						{ optionId: "deny", name: "Deny", kind: "reject_once" },
@@ -642,33 +642,33 @@ describe("Bounded-agentic execution", () => {
 
 			const adapter = new AcpAdapter(config, stubManager);
 
-			// Only read_file is allowed — shell(rm) should be denied
+			// approve-reads rejects execute kind → deny
 			await adapter.run({
 				prompt: "delete everything",
-				allowedTools: ["read_file"],
+				permissionMode: "approve-reads",
 				sessionId: "s",
 			});
 
-			expect(permissionOutcomes).toEqual(["cancelled"]);
+			expect(permissionOutcomes).toEqual(["selected"]);
 		});
 
-		it("approves an allowlisted tool and denies others in the same run", async () => {
-			const config = makeConfig({ llm: { allowedTools: [] } });
+		it("approves read tools and denies unsafe tools in the same run", async () => {
+			const config = makeConfig({ llm: { permissionMode: "approve-reads" } });
 			const permissionOutcomes: string[] = [];
 
 			const { stubManager } = makeStubSession(async (delegate) => {
-				// First tool: allowed
+				// First tool: read kind → allowed
 				const r1 = await delegate.current.requestPermission({
 					sessionId: "s",
-					toolCall: { toolCallId: "c1", title: "read_file", status: "pending" },
+					toolCall: { toolCallId: "c1", title: "read_file", status: "pending", kind: "read" },
 					options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
 				});
 				permissionOutcomes.push(r1.outcome.outcome);
 
-				// Second tool: not allowed
+				// Second tool: execute kind → denied
 				const r2 = await delegate.current.requestPermission({
 					sessionId: "s",
-					toolCall: { toolCallId: "c2", title: "shell(rm)", status: "pending" },
+					toolCall: { toolCallId: "c2", title: "shell(rm)", status: "pending", kind: "execute" },
 					options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
 				});
 				permissionOutcomes.push(r2.outcome.outcome);
@@ -677,14 +677,14 @@ describe("Bounded-agentic execution", () => {
 			const adapter = new AcpAdapter(config, stubManager);
 			await adapter.run({
 				prompt: "mixed tools",
-				allowedTools: ["read_file"],
+				permissionMode: "approve-reads",
 				sessionId: "s",
 			});
 
-			expect(permissionOutcomes).toEqual(["selected", "cancelled"]);
+			expect(permissionOutcomes).toEqual(["selected", "selected"]);
 		});
 
-		it("runtime passes policy.toolAllowlist into the adapter", async () => {
+		it("runtime passes policy.permissionMode into the adapter", async () => {
 			const adapter: LLMAdapter = {
 				run: vi.fn(async () => ({
 					status: "completed" as const,
@@ -693,21 +693,21 @@ describe("Bounded-agentic execution", () => {
 				})),
 				dispose: vi.fn(async () => {}),
 			};
-			const config = makeConfig({ llm: { allowedTools: ["default_tool"] } });
+			const config = makeConfig({ llm: { permissionMode: "deny-all" } });
 			const runtime = new AcpRuntime(config, adapter);
 
 			await runtime.run({
 				backend: "acp",
 				prompt: "probe",
 				skills: [],
-				policy: { toolAllowlist: ["list_directory", "read_file"] },
+				policy: { permissionMode: "approve-all" },
 			});
 
 			const call = vi.mocked(adapter.run).mock.calls[0]?.[0];
-			expect(call?.allowedTools).toEqual(["list_directory", "read_file"]);
+			expect(call?.permissionMode).toBe("approve-all");
 		});
 
-		it("falls back to config allowedTools when no policy is set", async () => {
+		it("falls back to config permissionMode when no policy is set", async () => {
 			const adapter: LLMAdapter = {
 				run: vi.fn(async () => ({
 					status: "completed" as const,
@@ -716,13 +716,13 @@ describe("Bounded-agentic execution", () => {
 				})),
 				dispose: vi.fn(async () => {}),
 			};
-			const config = makeConfig({ llm: { allowedTools: ["git", "ls"] } });
+			const config = makeConfig({ llm: { permissionMode: "deny-all" } });
 			const runtime = new AcpRuntime(config, adapter);
 
 			await runtime.run({ backend: "acp", prompt: "test", skills: [] });
 
 			const call = vi.mocked(adapter.run).mock.calls[0]?.[0];
-			expect(call?.allowedTools).toEqual(["git", "ls"]);
+			expect(call?.permissionMode).toBe("deny-all");
 		});
 	});
 

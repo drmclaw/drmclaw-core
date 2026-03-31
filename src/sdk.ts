@@ -8,6 +8,15 @@
 export type { SkillEntry, SkillMetadata } from "./skills/types.js";
 export { findMissingRequires } from "./skills/check.js";
 
+// Delivery types
+export { FileDeliveryQueue } from "./delivery/queue.js";
+export type {
+	DeliveryEntry,
+	DeliveryQueue,
+	DeliveryQueueOptions,
+	DeliveryStatus,
+} from "./delivery/types.js";
+
 // Connector types
 export type { Connector, MessageHandler } from "./connectors/interface.js";
 

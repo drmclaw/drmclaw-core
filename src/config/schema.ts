@@ -42,6 +42,16 @@ export const acpConfigSchema = z
 		command: z.string().optional(),
 		args: z.array(z.string()).optional(),
 		githubCopilot: githubCopilotConfigSchema.default({}),
+		mcpServers: z
+			.array(
+				z.object({
+					name: z.string(),
+					command: z.string(),
+					args: z.array(z.string()).default([]),
+					env: z.record(z.string()).default({}),
+				}),
+			)
+			.default([]),
 	})
 	.default({});
 export type AcpConfig = z.infer<typeof acpConfigSchema>;
@@ -69,17 +79,18 @@ const DEFAULT_ACP_ARGS = ["--acp", "--stdio"];
 export function resolveAcpCommandArgs(
 	provider: CliProvider,
 	acpCfg: AcpConfig,
+	modelOverride?: string,
 ): { command: string; args: string[] } {
 	const command = acpCfg.command ?? CLI_DEFAULT_COMMANDS[provider];
 	const baseArgs = acpCfg.args ?? DEFAULT_ACP_ARGS;
 
-	// github-copilot supports --model injection from config
-	if (provider === "github-copilot") {
-		const modelArgs =
-			acpCfg.githubCopilot.defaultModel && !baseArgs.includes("--model")
-				? ["--model", acpCfg.githubCopilot.defaultModel]
-				: [];
-		return { command, args: [...baseArgs, ...modelArgs] };
+	// Resolve model: explicit override > githubCopilot.defaultModel
+	const model =
+		modelOverride ??
+		(provider === "github-copilot" ? acpCfg.githubCopilot.defaultModel : undefined);
+
+	if (model && !baseArgs.includes("--model")) {
+		return { command, args: [...baseArgs, "--model", model] };
 	}
 
 	return { command, args: baseArgs };
@@ -91,6 +102,7 @@ export const configSchema = z.object({
 		.object({
 			port: z.number().int().min(1).max(65535).default(3000),
 			maxConcurrent: z.number().int().min(1).default(1),
+			maxQueueSize: z.number().int().min(0).default(50),
 		})
 		.default({}),
 
@@ -104,27 +116,13 @@ export const configSchema = z.object({
 	llm: z
 		.object({
 			provider: llmProviderSchema.default("github-copilot"),
+			model: z.string().optional(),
 			acp: acpConfigSchema.default({}),
 			apiKey: z.string().optional(),
-			allowedTools: z.array(z.string()).default([]),
-			allowedToolKinds: z
-				.array(
-					z.enum([
-						"read",
-						"edit",
-						"delete",
-						"move",
-						"search",
-						"execute",
-						"think",
-						"fetch",
-						"switch_mode",
-						"other",
-					]),
-				)
-				.default([]),
+			permissionMode: z.enum(["approve-all", "approve-reads", "deny-all"]).default("approve-all"),
 			retry: retryPolicySchema.default({}),
 			fallbacks: z.array(z.string()).default([]),
+			excludeModels: z.array(z.string()).default(["claude-opus-*-fast"]),
 		})
 		.default({}),
 

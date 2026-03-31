@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	type EventLogEntry,
-	buildUnifiedDisplay,
-	roundBgStyle,
-	roundBorderClass,
-	roundHue,
-	roundTextClass,
-} from "../ui/src/components/debugDisplayUtils.js";
+import { type EventLogEntry, buildUnifiedDisplay } from "../ui/src/components/debugDisplayUtils.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -170,62 +163,6 @@ describe("buildUnifiedDisplay", () => {
 		expect(g?.kind === "tool-call-group" && g.toolCallId).toBe("tc-1");
 		expect(g?.kind === "tool-call-group" && g.entries).toHaveLength(2);
 		expect(g?.kind === "tool-call-group" && g.isLive).toBe(false);
-	});
-});
-
-// ── Round color utilities ────────────────────────────────────────────
-
-describe("roundHue", () => {
-	it("returns 0 for round 1", () => {
-		expect(roundHue(1)).toBe(0);
-	});
-
-	it("returns distinct hues for consecutive rounds", () => {
-		const hues = Array.from({ length: 12 }, (_, i) => roundHue(i + 1));
-		const unique = new Set(hues.map((h) => Math.round(h)));
-		expect(unique.size).toBe(12);
-	});
-
-	it("wraps around within 0-360", () => {
-		for (let r = 1; r <= 20; r++) {
-			const h = roundHue(r);
-			expect(h).toBeGreaterThanOrEqual(0);
-			expect(h).toBeLessThan(360);
-		}
-	});
-});
-
-describe("roundBorderClass", () => {
-	it("returns valid Tailwind border class for any round", () => {
-		for (let r = 1; r <= 15; r++) {
-			expect(roundBorderClass(r)).toMatch(/^border-\w+-500$/);
-		}
-	});
-});
-
-describe("roundTextClass", () => {
-	it("returns valid Tailwind text class for any round", () => {
-		for (let r = 1; r <= 15; r++) {
-			expect(roundTextClass(r)).toMatch(/^text-\w+-400$/);
-		}
-	});
-});
-
-describe("roundBgStyle", () => {
-	it("returns undefined for round 0", () => {
-		expect(roundBgStyle(0)).toBeUndefined();
-	});
-
-	it("returns an hsla backgroundColor for positive rounds", () => {
-		const style = roundBgStyle(1);
-		expect(style).toBeDefined();
-		expect(style?.backgroundColor).toMatch(/^hsla\(/);
-	});
-
-	it("produces distinct bg colors for many rounds", () => {
-		const colors = Array.from({ length: 20 }, (_, i) => roundBgStyle(i + 1)?.backgroundColor);
-		const unique = new Set(colors);
-		expect(unique.size).toBe(20);
 	});
 });
 

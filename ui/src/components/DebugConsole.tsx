@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { UseWebSocketReturn } from "../hooks/useWebSocket.js";
@@ -7,6 +7,9 @@ import {
 	type UnifiedDisplayItem,
 	buildUnifiedDisplay,
 } from "./debugDisplayUtils.js";
+import { gateEventMessage, shouldAcknowledgeResult } from "./wsMessageFiltering.js";
+
+import { ModelSelector } from "./ModelSelector.js";
 
 interface ChatMessage {
 	role: "user" | "assistant";
@@ -27,7 +30,23 @@ function formatTime(iso: string): string {
 
 // ── Main component ───────────────────────────────────────────────────
 
-export function DebugConsole({ ws }: { ws: UseWebSocketReturn }) {
+interface DebugConsoleProps {
+	ws: UseWebSocketReturn;
+	model: string | null;
+	models: string[];
+	onModelChange: (model: string) => void;
+	replayTarget: { taskId: string; prompt: string } | null;
+	onReplayConsumed: () => void;
+}
+
+export function DebugConsole({
+	ws,
+	model,
+	models,
+	onModelChange,
+	replayTarget,
+	onReplayConsumed,
+}: DebugConsoleProps) {
 	const [input, setInput] = useState("");
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [eventLog, setEventLog] = useState<EventLogEntry[]>([]);
@@ -36,11 +55,25 @@ export function DebugConsole({ ws }: { ws: UseWebSocketReturn }) {
 
 	const chatBottomRef = useRef<HTMLDivElement>(null);
 	const eventsBottomRef = useRef<HTMLDivElement>(null);
+	const processedCountRef = useRef(0);
+	// Ref mirror of currentTaskId so the WS consumer effect can filter
+	// by task without re-running on every state change.
+	const currentTaskIdRef = useRef<string | null>(null);
+	// Abort controller for the in-flight replay fetch; replaced on each
+	// new replay request so only the latest fetch writes state.
+	const replayAbortRef = useRef<AbortController | null>(null);
 
-	// Replay events from HTTP on mount (latest task)
-	const replayTask = useCallback(async (taskId: string) => {
+	/** Update both the state and its ref mirror. */
+	const setTaskId = useCallback((id: string | null) => {
+		currentTaskIdRef.current = id;
+		setCurrentTaskId(id);
+	}, []);
+
+	// Replay events from HTTP for a given task.
+	// Accepts an AbortSignal so callers can cancel stale fetches.
+	const replayTask = useCallback(async (taskId: string, signal?: AbortSignal) => {
 		try {
-			const res = await fetch(`/api/tasks/${taskId}/events`);
+			const res = await fetch(`/api/tasks/${taskId}/events`, { signal });
 			if (!res.ok) return;
 			const events = (await res.json()) as Array<{
 				taskId: string;
@@ -49,6 +82,10 @@ export function DebugConsole({ ws }: { ws: UseWebSocketReturn }) {
 				source: string;
 				event: Record<string, unknown>;
 			}>;
+
+			// Guard: if the signal was aborted between the fetch and here,
+			// a newer replay has started — discard this result.
+			if (signal?.aborted) return;
 
 			const entries: EventLogEntry[] = [];
 			const chatMsgs: ChatMessage[] = [];
@@ -78,17 +115,29 @@ export function DebugConsole({ ws }: { ws: UseWebSocketReturn }) {
 					return [...prev, ...chatMsgs];
 				});
 			}
-		} catch {
-			// Replay failed silently
+		} catch (err: unknown) {
+			// Silently ignore aborted fetches; other errors are also swallowed
+			// (no user-visible feedback for replay failures today).
+			if (err instanceof DOMException && err.name === "AbortError") return;
 		}
 	}, []);
 
-	// Load last task on mount (in-memory first, then persisted fallback)
+	// Load last task on mount (in-memory first, then persisted fallback).
+	// Skip if a replayTarget is already queued — the replay effect handles that.
+	// Registers its AbortController in the shared replayAbortRef so that a
+	// subsequent replay selection, handleSend, or handleNew can cancel this
+	// fetch.  The cleanup does NOT abort — only clears the ref if it is still
+	// ours — because React cleanup would otherwise cancel a replay-target
+	// effect that started between mount and cleanup.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: replayTarget read is intentionally non-reactive (only checked once on mount)
 	useEffect(() => {
+		if (replayTarget) return;
+		const ac = new AbortController();
+		replayAbortRef.current = ac;
 		(async () => {
 			let tasks: Array<{ id: string; prompt: string }> = [];
 			try {
-				const res = await fetch("/api/tasks");
+				const res = await fetch("/api/tasks", { signal: ac.signal });
 				if (res.ok) tasks = (await res.json()) as Array<{ id: string; prompt: string }>;
 			} catch {
 				/* ignore */
@@ -97,104 +146,193 @@ export function DebugConsole({ ws }: { ws: UseWebSocketReturn }) {
 			// Fallback to persisted task list (survives backend restarts)
 			if (tasks.length === 0) {
 				try {
-					const res = await fetch("/api/events/tasks");
+					const res = await fetch("/api/events/tasks", { signal: ac.signal });
 					if (res.ok) tasks = (await res.json()) as Array<{ id: string; prompt: string }>;
 				} catch {
 					/* ignore */
 				}
 			}
 
-			if (tasks.length === 0) return;
+			if (tasks.length === 0 || ac.signal.aborted) return;
 			const last = tasks[tasks.length - 1];
 			if (last) {
-				setCurrentTaskId(last.id);
+				setTaskId(last.id);
 				setChatMessages([{ role: "user", content: last.prompt }]);
-				await replayTask(last.id);
+				await replayTask(last.id, ac.signal);
 			}
 		})();
-	}, [replayTask]);
+		return () => {
+			ac.abort();
+			// Clear the shared ref only if it still points to our controller;
+			// a replay-target effect may have already replaced it.
+			if (replayAbortRef.current === ac) {
+				replayAbortRef.current = null;
+			}
+		};
+	}, [replayTask, setTaskId]);
 
-	// Process incoming WebSocket messages
+	// Handle replay requests from the Tasks tab.
+	// Each new request aborts any in-flight replay fetch so only the
+	// latest selection wins — prevents out-of-order resolution.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: replayTarget is the sole intentional trigger; other deps are stable refs/callbacks
 	useEffect(() => {
-		if (!ws.lastMessage) return;
-		const msg = ws.lastMessage;
+		if (!replayTarget) return;
+		const { taskId, prompt } = replayTarget;
 
-		if (msg.type === "event") {
-			const source = msg.source as string;
-			const seq = msg.sequence as number;
-			const ts = msg.timestamp as string;
-			const event = msg.event as Record<string, unknown>;
-			const eventType = event.type as string;
+		// Cancel any previous in-flight replay fetch
+		replayAbortRef.current?.abort();
+		const ac = new AbortController();
+		replayAbortRef.current = ac;
 
-			setEventLog((prev) => [
-				...prev,
-				{
+		// Reset state for the replayed task
+		setChatMessages([{ role: "user", content: prompt }]);
+		setEventLog([]);
+		setTaskId(taskId);
+		setStreaming(false);
+		setInput("");
+		// Advance the WS cursor so stale events don't leak into the replayed session
+		processedCountRef.current = ws.messages.length;
+
+		replayTask(taskId, ac.signal);
+		onReplayConsumed();
+		// No cleanup here — onReplayConsumed() sets replayTarget to null,
+		// which triggers a re-render and would run cleanup, aborting the
+		// fetch we just started.  Cancellation of *previous* replays is
+		// handled above (replayAbortRef.current?.abort()).
+	}, [replayTarget]);
+
+	// Process incoming WebSocket messages.
+	// We track a processed-count ref and slice ws.messages to drain ALL
+	// new messages each render.  This avoids the lossy `lastMessage` path
+	// where React can skip intermediate values when messages arrive faster
+	// than React commits renders (thinking/stream chunks are single words
+	// fired near-simultaneously).
+	//
+	// Task-ID filtering: only process events whose taskId matches the
+	// current task.  When currentTaskId is null (fresh session after
+	// "+ New"), the first arriving taskId becomes the active task.
+	// Events for unrelated tasks (e.g. another tab, scheduled job) are
+	// silently dropped so historical replays aren't contaminated.
+
+	useEffect(() => {
+		const start = processedCountRef.current;
+		const all = ws.messages;
+		if (start >= all.length) return;
+		processedCountRef.current = all.length;
+
+		const newMsgs = all.slice(start);
+
+		// Batch all new event-log entries into a single state update
+		// to avoid O(n²) intermediate arrays from repeated functional updaters.
+		const newEntries: EventLogEntry[] = [];
+
+		for (const msg of newMsgs) {
+			if (msg.type === "event") {
+				const msgTaskId = msg.taskId as string | undefined;
+
+				// ── Task-ID gate ──
+				const gate = gateEventMessage(currentTaskIdRef.current, msgTaskId);
+				if (!gate.accept) continue;
+				if (gate.adoptTaskId) {
+					setTaskId(gate.adoptTaskId);
+				}
+
+				const source = msg.source as string;
+				const seq = msg.sequence as number;
+				const ts = msg.timestamp as string;
+				const event = msg.event as Record<string, unknown>;
+				const eventType = event.type as string;
+
+				newEntries.push({
 					sequence: seq,
 					timestamp: ts,
 					source: source as EventLogEntry["source"],
 					event: event as EventLogEntry["event"],
-				},
-			]);
+				});
 
-			if (eventType === "lifecycle") {
-				const phase = event.phase as string;
-				if (phase === "start") {
-					setStreaming(true);
-					setChatMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-				} else if (phase === "end" || phase === "error") {
+				if (eventType === "lifecycle") {
+					const phase = event.phase as string;
+					if (phase === "start") {
+						setStreaming(true);
+						setChatMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+					} else if (phase === "end" || phase === "error") {
+						setStreaming(false);
+					}
+				}
+
+				if (eventType === "stream") {
+					const delta = event.delta as string;
+					setChatMessages((prev) => {
+						const updated = [...prev];
+						const lastIdx = updated.length - 1;
+						const last = updated[lastIdx];
+						if (last?.role === "assistant") {
+							updated[lastIdx] = { ...last, content: last.content + delta };
+						}
+						return updated;
+					});
+				}
+			} else if (msg.type === "result") {
+				const resultTaskId = msg.taskId as string | undefined;
+				if (shouldAcknowledgeResult(currentTaskIdRef.current, resultTaskId)) {
 					setStreaming(false);
 				}
 			}
-
-			if (eventType === "stream") {
-				const delta = event.delta as string;
-				setChatMessages((prev) => {
-					const updated = [...prev];
-					const lastIdx = updated.length - 1;
-					const last = updated[lastIdx];
-					if (last?.role === "assistant") {
-						updated[lastIdx] = { ...last, content: last.content + delta };
-					}
-					return updated;
-				});
-			}
-
-			if (msg.taskId) {
-				setCurrentTaskId(msg.taskId as string);
-			}
-		} else if (msg.type === "result") {
-			setStreaming(false);
 		}
-	}, [ws.lastMessage]);
 
-	// Auto-scroll each column
+		if (newEntries.length > 0) {
+			setEventLog((prev) => [...prev, ...newEntries]);
+		}
+	}, [ws.messages, setTaskId]);
+
+	// Auto-scroll each column when new entries arrive
+	// biome-ignore lint/correctness/useExhaustiveDependencies: length is an intentional trigger for scroll side-effect
 	useEffect(() => {
 		chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
-	}, [chatMessages]);
+	}, [chatMessages.length]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: length is an intentional trigger for scroll side-effect
 	useEffect(() => {
 		eventsBottomRef.current?.scrollIntoView({ behavior: "smooth" });
-	}, [eventLog]);
+	}, [eventLog.length]);
 
 	function handleNew() {
+		// Cancel any in-flight replay fetch
+		replayAbortRef.current?.abort();
+		replayAbortRef.current = null;
 		setChatMessages([]);
 		setEventLog([]);
-		setCurrentTaskId(null);
+		setTaskId(null);
 		setStreaming(false);
 		setInput("");
+		// Move the processing cursor to the current end of ws.messages so
+		// stale events from the previous session are never replayed into
+		// the new (empty) session.
+		processedCountRef.current = ws.messages.length;
 	}
 
 	function handleSend() {
 		const trimmed = input.trim();
 		if (!trimmed || streaming) return;
 
-		// Clear logs for new task
+		// Cancel any in-flight replay fetch so its stale response cannot
+		// overwrite the new live run's state.
+		replayAbortRef.current?.abort();
+		replayAbortRef.current = null;
+
+		// Clear logs and reset the active task ID so the WS consumer
+		// adopts the first taskId that arrives from the new run.
 		setEventLog([]);
+		setTaskId(null);
+		processedCountRef.current = ws.messages.length;
 		setChatMessages((prev) => [...prev, { role: "user", content: trimmed }]);
 		ws.send({ type: "chat", message: trimmed });
 		setInput("");
 	}
 
-	const unifiedDisplay = buildUnifiedDisplay(eventLog, streaming);
+	const unifiedDisplay = useMemo(
+		() => buildUnifiedDisplay(eventLog, streaming),
+		[eventLog, streaming],
+	);
 
 	return (
 		<div className="flex h-[calc(100vh-3.5rem)] divide-x divide-gray-800">
@@ -244,6 +382,12 @@ export function DebugConsole({ ws }: { ws: UseWebSocketReturn }) {
 						onKeyDown={(e) => e.key === "Enter" && handleSend()}
 						placeholder="Send a message..."
 						className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+						disabled={streaming}
+					/>
+					<ModelSelector
+						model={model}
+						models={models}
+						onModelChange={onModelChange}
 						disabled={streaming}
 					/>
 					<button

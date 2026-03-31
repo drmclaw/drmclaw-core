@@ -24,7 +24,7 @@
 	},
 	"files": ["dist", "skills"],
 	"scripts": {
-		"dev": "pnpm run dev:server & pnpm --filter drmclaw-ui dev & wait",
+		"dev": "pnpm run dev:server </dev/null & pnpm --filter drmclaw-ui dev </dev/null & wait",
 		"dev:server": "tsx watch src/cli.ts",
 		"build": "rm -rf dist && tsc",
 		"check": "tsc --noEmit -p tsconfig.check.json",

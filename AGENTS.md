@@ -31,7 +31,7 @@ This repo contains **only reusable, domain-agnostic** runtime capabilities.
 - Workspace bootstrap file support (`AGENTS.md`, `CONTEXT.md` injection)
 - Stream chunking and WebSocket delivery
 - Bundled system skills and starter examples
-- Developer console UI (operator/self-host admin surface, Vite + React + Tailwind)
+- Developer console UI (operator/self-host admin surface, esbuild + React + Tailwind)
 - Self-host templates and deployment guides
 
 ### What does NOT belong here
@@ -56,63 +56,50 @@ When working in this repo:
 4. **Prefer composition over coupling.** New capabilities should be exposed as interfaces, adapters, or extension points — not hard-wired behaviors.
 5. **Test with Vitest.** Run `pnpm test` before submitting changes.
 6. **Format with Biome.** Run `pnpm lint` to check formatting and lint rules.
+7. **Run commands from the project root.** When this repo is part of a multi-root VS Code workspace, **all terminal commands** (`pnpm test`, `pnpm lint`, `tsc`, etc.) **must execute from the `drmclaw-core` directory**, not the workspace root. Always `cd` into the project directory first, or use an absolute path. Failure to do so causes commands to fail silently or operate on the wrong `package.json`.
+
+   **Background terminals and long-running processes.** Be aware of this specific pitfall when starting servers or watchers from agent tooling:
+   - **Backgrounded processes suspend on tty read.** Running a command with `&` inside an interactive (foreground) terminal creates a background job. If that job reads from stdin, the OS sends `SIGTTIN` and suspends it (`suspended (tty input)`). To avoid this: use the tool's native background-process support (which gives the process its own pty), or redirect stdin explicitly (`cmd </dev/null &`), or avoid manual `&` altogether.
+8. **Keep committed code environment-neutral.** The repo should work for any contributor on any machine. Do not commit:
+   - Absolute paths tied to a specific machine (`/Users/…`, `/home/…`, `C:\Users\…`)
+   - Real credentials, API keys, tokens, or passwords (use placeholders like `sk-your-key-here` in examples)
+   - Hostnames or URLs pointing to private infrastructure
+   - Values that vary per deployment belong in `drmclaw.config.local.ts` (gitignored), environment variables, or example config with placeholder values.
+9. **No debug code in committed files.** Code merged to the repo must be production-ready:
+   - No `debugger` statements
+   - No `console.log` / `console.debug` / `console.warn` used for ad-hoc debugging (structured operational logging with a `[drmclaw]` prefix in `cli.ts` and CLI output in `skills/cli.ts` are fine)
+   - No commented-out code blocks left behind from development
+   - No `// @ts-ignore` or `// @ts-expect-error` without a comment explaining why
+   - `TODO` / `FIXME` comments are allowed only when they describe a genuine backlog item with enough context for a future contributor to act on them — not as markers for half-finished or known-broken code
 
 ## Implement → Review → Enhance Loop
 
-Before closing any implementation effort, agents **must** perform a self-review pass and iterate until the work is actually clean, not merely “green enough”. The loop is:
+Before closing any implementation effort, agents **must** perform a self-review pass and iterate until the work is actually clean, not merely "green enough".
 
-1. **Implement** — Write the code, the narrowest tests that prove it, and any required docs or config updates.
-2. **Review** — Switch into reviewer mode and try to disprove the change. This is a **separate todo item** from running CI. It must produce a **written findings list** before any enhancement begins.
+The preferred workflow in this workspace is to use the shared custom agents `Implement and Review` and `Code Review`. Those agents handle the implementation and review handoff automatically, but they still need to satisfy this repo's review criteria and completion gate.
 
-   **Required output format.** Before proceeding to step 3, emit a review block in exactly this structure:
+These shared custom agents are optional workflow helpers, not a hard requirement for contributing. Some developers or tools may not load workspace custom agents, may not have the same VS Code customization setup, or may work outside this workspace layout. In those cases, follow the same review criteria and completion gate manually.
 
-   ```
-   ## Review Findings
+Whether the review is manual or done through the shared workspace agents, it must be a distinct step from CI and must produce a visible written review artifact before the task is considered done.
 
-   Walking AGENTS.md criteria against the current state:
+At minimum, the review must check:
 
-   1. **Design fit** — PASS | FINDING: [file:line] [description]
-   2. **README alignment** — PASS | FINDING: [file:line] [description]
-   3. **Protocol fidelity** — PASS | FINDING: [file:line] [description]
-   4. **Boundary correctness** — PASS | FINDING: [file:line] [description]
-   5. **Test isolation** — PASS | FINDING: [file:line] [description]
-   6. **Type coverage** — PASS | FINDING: [file:line] [description]
-   7. **Diagnostic cleanliness** — PASS | FINDING: [file:line] [description]
-   8. **CI robustness** — PASS | FINDING: [file:line] [description]
-   9. **Regression surface** — PASS | FINDING: [file:line] [description]
-   10. **Test ↔ README sync** — PASS | FINDING: [file:line] [description]
+- **Design fit**: Does the change belong in `drmclaw-core`, stay domain-agnostic, and preserve existing module boundaries?
+- **README alignment**: Does the implementation still match the promises, architecture, public surface, and operational model described in `README.md`?
+- **README decision**: If implementation and `README.md` diverge, decide explicitly which is wrong and update code or docs so they agree in the same change.
+- **Protocol fidelity**: Do request/response shapes match upstream SDK or protocol schema exactly? Prefer importing real ACP or SDK types over recreating protocol objects by hand.
+- **Boundary correctness**: Are tests exercising the real seam under discussion?
+- **Test isolation**: Tests must not duplicate production decision logic in local helpers and must probe adversarial as well as happy-path inputs.
+- **Type coverage**: Are all changed files type-checked, including surfaces excluded from the root TypeScript program?
+- **Diagnostic cleanliness**: Changed files must be warning-free in the editor.
+- **CI robustness**: Avoid hardcoded ports, temp paths, clock-sensitive sleeps, race-prone cleanup, and hidden environment assumptions.
+- **Regression surface**: Check adjacent behavior, public exports, config examples, and docs when runtime wiring or public workflows change.
+- **Test ↔ README sync**: When key test coverage changes, update `README.md` accordingly.
 
-   **Total findings: N**
-   ```
+If the active workflow expects a review block, it must be emitted as a visible artifact. Silent "looks fine" reviews do not count.
 
-   If all 10 say PASS, that is a valid review. But the review must exist as a visible artifact — not a silent “I checked and it's fine.”
+After review, fix every substantive finding and re-review until the result is actually clean.
 
-   Check at minimum:
-   - **Design fit**: Does the change belong in `drmclaw-core`, stay domain-agnostic, and preserve existing module boundaries?
-   - **README alignment**: Does the implementation still match the promises, architecture, public surface, and operational model described in `README.md`?
-   - **README decision**: If implementation and `README.md` diverge, decide explicitly which is wrong:
-     - if the code drifted from the intended product contract, adjust the implementation;
-     - if the implementation is the new correct direction, update `README.md` in the same change;
-     - if both are partially stale, fix both until they agree.
-   - **Protocol fidelity**: Do request/response shapes match the upstream SDK or protocol schema exactly? Prefer importing real ACP or SDK types over recreating protocol objects by hand.
-   - **Boundary correctness**: Are tests exercising the real seam under discussion? Integration tests should boot the composed app or runtime path, not a re-implemented copy of the logic.
-   - **Test isolation**: Tests must not duplicate production decision logic in local helpers. Import the production function, or construct the real object and call the real method. Test inputs must include adversarial shapes that violate the implementation's assumptions — not only idealized sequences that confirm the happy path (see "Happy-path mirror" anti-pattern).
-   - **Type coverage**: Are all changed files type-checked? If the root `tsconfig.json` excludes tests, UI, or other changed files, run an additional typecheck or use editor diagnostics so those files are verified too.
-   - **Diagnostic cleanliness**: The repo should be clean in the editor. Warnings or schema errors in changed files count as regressions even if `pnpm build` still passes.
-   - **CI robustness**: No hardcoded ports, temp paths, clock-sensitive sleeps, race-prone cleanup, or environment assumptions. Prefer OS-assigned resources, deterministic teardown, and explicit timeouts.
-   - **Regression surface**: Check adjacent behavior, public exports, config examples, and docs whenever the change touches runtime wiring, package boundaries, or user-facing workflows.
-   - **Test ↔ README sync**: When key test cases are added, removed, or substantially changed — especially new test files, renamed test suites, or shifted coverage areas — verify that `README.md` sections referencing test coverage (e.g., "Real-Provider Tests", test file lists, coverage descriptions) are updated to match. A test suite that `README.md` doesn't mention (or still describes with stale names/counts) is a documentation drift.
-
-3. **Enhance** — Fix every finding from step 2, then re-run the review. Repeat until the review yields zero substantive findings.
-
-### Anti-patterns
-
-These are known failure modes. If you catch yourself doing any of these, stop and restart the Review step properly:
-
-- **Collapsing Review into CI.** A todo called “Self-review: tests + lint + tsc” is not a review. Running `pnpm test` is the Completion Gate, not the Review. The Review reads code and produces findings.
-- **Skipping the findings list.** If you proceed to Enhance (or to marking the task complete) without emitting the numbered findings block above, the Review did not happen.
-- **“PASS” without reading.** Each criterion requires re-reading the relevant file(s). “PASS” means “I read the file and found no issue,” not “I assume it's fine.”
-- **Batching Review with other todos.** Review is its own task. It is not a sub-bullet of “Implement” or “Run tests.” Create a separate todo for it.- **Happy-path mirror.** Test data must not be shaped to confirm the algorithm works — it must be shaped to probe where the algorithm breaks. If every test input follows the exact structure the implementation assumes (e.g., contiguous sequences when the real system produces interleaved ones, single-item inputs when production handles batches, synchronous arrival when events race), the tests prove nothing beyond "the code does what the code does." For every behavioral assumption the implementation makes, write at least one test that violates it: out-of-order inputs, interleaved sequences, concurrent/parallel arrivals, missing fields, duplicate entries, and boundary values. Ask: "What real-world input shape would make this algorithm silently wrong?" — then write that test first.
 ### Completion Gate
 
 Do **not** mark the task complete until all of the following are true:

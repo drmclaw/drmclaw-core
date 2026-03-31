@@ -6,10 +6,8 @@ import type { SkillEntry } from "../skills/types.js";
  * for both ACP and direct-provider runtimes.
  */
 export interface CommonExecutionPolicy {
-	/** Allowed tool names. Empty = allow all. */
-	toolAllowlist?: string[];
-	/** Allowed tool kinds. Empty = allow all kinds. */
-	toolKindAllowlist?: string[];
+	/** Permission mode override for this run. */
+	permissionMode?: "approve-all" | "approve-reads" | "deny-all";
 	/** Allowed skill names. Empty = allow all. */
 	skillAllowlist?: string[];
 	/** File path patterns the agent may read/write. */

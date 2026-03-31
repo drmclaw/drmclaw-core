@@ -12,6 +12,7 @@ import type { TaskResult } from "../src/runner/types.js";
 import { AcpRuntime } from "../src/runtime/agent.js";
 import { CronService } from "../src/scheduler/service.js";
 import { createApp } from "../src/server/app.js";
+import type { SkillEntry } from "../src/skills/types.js";
 
 /**
  * Integration test: boots the Hono app with a mock LLM adapter and
@@ -67,7 +68,14 @@ beforeAll(() => {
 		await webConnector.sendTaskStatus(record.id, record.result);
 	});
 
-	const { app, injectWebSocket } = createApp(runner, scheduler, skills, webConnector);
+	const { app, injectWebSocket } = createApp(
+		runner,
+		scheduler,
+		skills,
+		webConnector,
+		config,
+		adapter,
+	);
 	server = serve({ fetch: app.fetch, port: 0 });
 	injectWebSocket(server);
 
@@ -87,6 +95,14 @@ describe("HTTP + WebSocket integration", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { status: string };
 		expect(body.status).toBe("ok");
+	});
+
+	it("GET /api/ready returns ready when no isReady callback is provided", async () => {
+		const res = await fetch(`${BASE}/api/ready`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { status: string; uptime: number };
+		expect(body.status).toBe("ready");
+		expect(typeof body.uptime).toBe("number");
 	});
 
 	it("GET /api/skills lists skills", async () => {
@@ -192,5 +208,54 @@ describe("HTTP + WebSocket integration", () => {
 		expect(result.taskId).toBeDefined();
 
 		ws.close();
+	});
+});
+
+// ── /ready endpoint with isReady callback ────────────────────────────
+
+describe("GET /api/ready — with isReady callback", () => {
+	let readyServer: ReturnType<typeof serve>;
+	let readyFlag = false;
+	let readyBASE: string;
+
+	beforeAll(() => {
+		const config = configSchema.parse({});
+		const adapter = makeMockAdapter();
+		const runtime = new AcpRuntime(config, adapter);
+		const skills: SkillEntry[] = [];
+		const readyRunner = new TaskRunner(config, runtime, skills);
+		const scheduler = new CronService(
+			join(mkdtempSync(join(tmpdir(), "drmclaw-ready-")), "jobs.json"),
+		);
+		scheduler.setRunner(readyRunner);
+		const webConnector = new WebConnector();
+
+		const { app } = createApp(readyRunner, scheduler, skills, webConnector, config, adapter, {
+			isReady: () => readyFlag,
+		});
+		readyServer = serve({ fetch: app.fetch, port: 0 });
+		const addr = readyServer.address() as AddressInfo;
+		readyBASE = `http://localhost:${addr.port}`;
+	});
+
+	afterAll(() => {
+		readyServer?.close();
+	});
+
+	it("returns 503 with status 'starting' before server is ready", async () => {
+		readyFlag = false;
+		const res = await fetch(`${readyBASE}/api/ready`);
+		expect(res.status).toBe(503);
+		const body = (await res.json()) as { status: string; uptime: number };
+		expect(body.status).toBe("starting");
+		expect(typeof body.uptime).toBe("number");
+	});
+
+	it("returns 200 with status 'ready' after server signals ready", async () => {
+		readyFlag = true;
+		const res = await fetch(`${readyBASE}/api/ready`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { status: string; uptime: number };
+		expect(body.status).toBe("ready");
 	});
 });

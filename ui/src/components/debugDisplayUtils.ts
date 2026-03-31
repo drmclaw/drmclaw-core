@@ -53,65 +53,6 @@ export type UnifiedDisplayItem =
 			isLive: boolean;
 	  };
 
-// ── Round color generation (HSL-based, infinite distinct colors) ─────
-
-/**
- * Generate a round color set from the round number.
- *
- * Uses the golden-angle hue spacing (137.508°) which produces maximally
- * distinct hues even for 20+ rounds, avoiding the 6-color cycling limit.
- */
-export function roundHue(round: number): number {
-	// Golden-angle spacing: each round steps ~137.5° around the wheel
-	return ((round - 1) * 137.508) % 360;
-}
-
-export function roundBorderClass(round: number): string {
-	// Tailwind can't do arbitrary HSL at build time without JIT config,
-	// so we return inline-style-compatible HSL strings via a helper.
-	// For the Tailwind border classes we keep a small palette and cycle.
-	const palette = [
-		"border-blue-500",
-		"border-purple-500",
-		"border-cyan-500",
-		"border-amber-500",
-		"border-emerald-500",
-		"border-pink-500",
-		"border-rose-500",
-		"border-teal-500",
-		"border-indigo-500",
-		"border-orange-500",
-		"border-lime-500",
-		"border-fuchsia-500",
-	];
-	return palette[(round - 1) % palette.length] ?? "border-gray-500";
-}
-
-export function roundTextClass(round: number): string {
-	const palette = [
-		"text-blue-400",
-		"text-purple-400",
-		"text-cyan-400",
-		"text-amber-400",
-		"text-emerald-400",
-		"text-pink-400",
-		"text-rose-400",
-		"text-teal-400",
-		"text-indigo-400",
-		"text-orange-400",
-		"text-lime-400",
-		"text-fuchsia-400",
-	];
-	return palette[(round - 1) % palette.length] ?? "text-gray-400";
-}
-
-/** Inline style for round-tinted backgrounds (works for any round count). */
-export function roundBgStyle(round: number): { backgroundColor: string } | undefined {
-	if (round <= 0) return undefined;
-	const hue = roundHue(round);
-	return { backgroundColor: `hsla(${hue}, 70%, 55%, 0.05)` };
-}
-
 // ── Display builder ──────────────────────────────────────────────────
 
 /**

@@ -30,7 +30,7 @@ export class TaskRunner {
 		private readonly runtime: AgentRuntime,
 		private readonly skills: SkillEntry[],
 	) {
-		this.queue = new TaskQueue(config.server.maxConcurrent);
+		this.queue = new TaskQueue(config.server.maxConcurrent, config.server.maxQueueSize);
 		this.maxHistory = config.taskHistory.maxEntries;
 	}
 
@@ -47,6 +47,11 @@ export class TaskRunner {
 	/** Set a handler for queue wait notifications (forwarded to WebSocket). */
 	onQueueNotice(handler: (taskId: string, position: number) => void): void {
 		this.queue.setQueueNoticeHandler(handler);
+	}
+
+	/** Stop accepting new tasks and wait for in-flight work to finish. */
+	async drain(): Promise<void> {
+		return this.queue.drain();
 	}
 
 	/**
@@ -79,10 +84,14 @@ export class TaskRunner {
 		let sequence = 0;
 
 		const persistEvent = async (event: PersistedRuntimeEvent): Promise<void> => {
+			// Broadcast BEFORE disk I/O so that WebSocket delivery preserves
+			// the arrival order of streaming chunks.  Without this, concurrent
+			// `append()` calls race and `onPersistedEvent` fires out of order
+			// (the root cause of garbled streaming text like ".53GPT--Codex").
+			options?.onPersistedEvent?.(event);
 			if (this.eventStore) {
 				await this.eventStore.append(taskId, event);
 			}
-			options?.onPersistedEvent?.(event);
 		};
 
 		const makeEvent = (
@@ -103,7 +112,9 @@ export class TaskRunner {
 			result = await this.executeTask(request, options?.sessionId, (runtimeEvent) => {
 				const { source, ...eventPayload } = runtimeEvent;
 				const persisted = makeEvent(source, eventPayload as PersistedRuntimeEvent["event"]);
-				persistEvent(persisted);
+				persistEvent(persisted).catch((err) => {
+					console.error("[drmclaw] Event persist error:", err);
+				});
 				options?.onEvent?.(runtimeEvent);
 			});
 		} catch (error) {
