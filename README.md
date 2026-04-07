@@ -241,6 +241,7 @@ All tests run via `pnpm test` with no external dependencies (no real LLM provide
 | `delivery-queue.test.ts` | Delivery queue: write-ahead enqueue, two-phase ack, fail/retry, crash recovery, concurrent operations |
 | `debug-display-utils.test.ts` | Developer console display grouping: stream/thinking collapse, toolCallId-based tool-call grouping, interleaved parallel tool events |
 | `ui-build.test.ts` | UI production build: correct asset paths, no duplicate CSS, all referenced assets exist |
+| `ws-message-filtering.test.ts` | WebSocket message gating: task-scoped event filtering, stale-result acknowledgment |
 
 ### Skills Hardening
 
@@ -275,6 +276,7 @@ drmclaw-core/
 │   ├── scheduler/              # Cron service, timer loop, job store
 │   ├── connectors/             # Connector interface + web connector
 │   ├── delivery/               # Write-ahead delivery queue for outbound messages
+│   ├── events/                 # Typed lifecycle events, JSONL event store
 │   └── server/                 # Hono app, REST routes, WebSocket handler
 ├── skills/                     # Bundled system skills (hello)
 ├── docs/examples/skills/       # Example skills (workspace-analyst, file-ops)
@@ -331,7 +333,7 @@ Examples of domains that can be built on top of the core:
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-org/drmclaw-core.git
+git clone https://github.com/drmclaw/drmclaw-core.git
 cd drmclaw-core
 
 # Install dependencies

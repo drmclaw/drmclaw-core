@@ -46,17 +46,32 @@ This repo contains **only reusable, domain-agnostic** runtime capabilities.
 If a capability is reusable across multiple domains, it belongs here.
 If it is specific to a single business vertical or product, it belongs in a separate product repo that depends on this core via published packages.
 
+## Commands
+
+All commands must run from the `drmclaw-core` directory. In a multi-root VS Code workspace, always `cd` into this project first — running from the workspace root will fail silently or operate on the wrong `package.json`.
+
+| Command | Purpose |
+|---|---|
+| `pnpm test` | Run all tests (Vitest) |
+| `pnpm lint` | Check formatting and lint (Biome) |
+| `pnpm lint:fix` | Auto-fix lint and formatting issues |
+| `pnpm check` | Typecheck (`tsc --noEmit -p tsconfig.check.json`) |
+| `pnpm build` | Production build (`rm -rf dist && tsc`) |
+| `pnpm dev` | Dev server + UI in watch mode |
+
+Requires **Node >= 22.0.0**.
+
 ## Agent Guidelines
 
 When working in this repo:
 
 1. **Keep it domain-agnostic.** Do not add code that assumes a specific business vertical (GTM, HR, finance, etc.). Domain-specific features belong in product repos that depend on this core.
 2. **Respect the boundary.** If a feature could be reused by any product built on the core, it belongs here. If it only serves one domain, it does not.
-3. **Use the established patterns.** Follow the existing module organization (`config/`, `skills/`, `llm/`, `runtime/`, `runner/`, `scheduler/`, `connectors/`, `server/`).
+3. **Use the established patterns.** Follow the existing module organization (`config/`, `skills/`, `llm/`, `runtime/`, `runner/`, `scheduler/`, `connectors/`, `server/`, `delivery/`, `events/`).
 4. **Prefer composition over coupling.** New capabilities should be exposed as interfaces, adapters, or extension points — not hard-wired behaviors.
 5. **Test with Vitest.** Run `pnpm test` before submitting changes.
 6. **Format with Biome.** Run `pnpm lint` to check formatting and lint rules.
-7. **Run commands from the project root.** When this repo is part of a multi-root VS Code workspace, **all terminal commands** (`pnpm test`, `pnpm lint`, `tsc`, etc.) **must execute from the `drmclaw-core` directory**, not the workspace root. Always `cd` into the project directory first, or use an absolute path. Failure to do so causes commands to fail silently or operate on the wrong `package.json`.
+7. **Run commands from the project root.** When this repo is part of a multi-root VS Code workspace, **all terminal commands** (`pnpm test`, `pnpm lint`, `pnpm check`, etc.) **must execute from the `drmclaw-core` directory**, not the workspace root. Always `cd` into the project directory first, or use an absolute path. Failure to do so causes commands to fail silently or operate on the wrong `package.json`.
 
    **Background terminals and long-running processes.** Be aware of this specific pitfall when starting servers or watchers from agent tooling:
    - **Backgrounded processes suspend on tty read.** Running a command with `&` inside an interactive (foreground) terminal creates a background job. If that job reads from stdin, the OS sends `SIGTTIN` and suspends it (`suspended (tty input)`). To avoid this: use the tool's native background-process support (which gives the process its own pty), or redirect stdin explicitly (`cmd </dev/null &`), or avoid manual `&` altogether.
@@ -107,7 +122,7 @@ Do **not** mark the task complete until all of the following are true:
 1. The implementation satisfies the intended design, not just the immediate test case.
 2. `pnpm test` is green.
 3. `pnpm lint` is green.
-4. `tsc --noEmit` is green for the relevant surface, or an equivalent additional typecheck/diagnostic pass covers files excluded from the root TypeScript program.
+4. `pnpm check` is green (runs `tsc --noEmit -p tsconfig.check.json`, which covers files excluded from the root TypeScript program).
 5. Changed files are warning-free in the editor.
 6. `README.md` and the implementation agree on the shipped behavior, architecture, and public contract.
 7. The final self-review produced a visible findings block with zero unresolved findings.
