@@ -12,6 +12,19 @@ Repository: `drmclaw-core`
 License: Open source
 Visibility: Public
 
+## Stability Expectations
+
+`drmclaw-core` is still actively evolving in both code and design.
+
+Agents should assume that **breaking changes are acceptable when they materially improve the architecture, simplify the public surface, or better fit the current runtime model**.
+
+Implications for agents:
+
+1. Do **not** preserve backward compatibility by default if it blocks a cleaner design.
+2. Prefer removing or reshaping unstable interfaces over adding long-lived compatibility shims.
+3. When making a breaking code or design change, update `README.md` in the same change so the documented contract matches reality.
+4. If a change is intentionally breaking, state that plainly in the review or implementation summary instead of treating it as an accidental regression.
+
 ## Boundary Rules
 
 This repo contains **only reusable, domain-agnostic** runtime capabilities.
@@ -61,6 +74,10 @@ All commands must run from the `drmclaw-core` directory. In a multi-root VS Code
 
 Requires **Node >= 22.0.0**.
 
+### Platform Support
+
+**macOS and Linux only.** Windows is not supported at this phase. The runtime, subprocess management, signal handling (`SIGTERM`/`SIGKILL`), and shell assumptions target POSIX environments. Do not add Windows-specific code paths, conditional `process.platform` branches, or Windows CI matrix entries.
+
 ## Agent Guidelines
 
 When working in this repo:
@@ -91,11 +108,11 @@ When working in this repo:
 
 Before closing any implementation effort, agents **must** perform a self-review pass and iterate until the work is actually clean, not merely "green enough".
 
-The preferred workflow in this workspace is to use the shared custom agents `Implement and Review` and `Code Review`. Those agents handle the implementation and review handoff automatically, but they still need to satisfy this repo's review criteria and completion gate.
+This workspace provides shared custom agents `Implement and Review` and `Code Review` for teams that want a structured handoff between implementation and review. They are available workflow helpers, not the only supported path, and they still need to satisfy this repo's review criteria and completion gate when used.
 
-These shared custom agents are optional workflow helpers, not a hard requirement for contributing. Some developers or tools may not load workspace custom agents, may not have the same VS Code customization setup, or may work outside this workspace layout. In those cases, follow the same review criteria and completion gate manually.
+Some developers or tools may not load workspace custom agents or may not have the same VS Code customization setup. In those cases, the active agent must still perform the review itself as a distinct LLM-driven step and satisfy the same review criteria and completion gate.
 
-Whether the review is manual or done through the shared workspace agents, it must be a distinct step from CI and must produce a visible written review artifact before the task is considered done.
+Whether the review is done by the active agent directly or through the shared workspace agents, it must be a distinct step from CI and must produce a visible written review artifact before the task is considered done.
 
 At minimum, the review must check:
 

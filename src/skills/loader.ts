@@ -51,6 +51,22 @@ export async function loadSkills(config: DrMClawConfig): Promise<SkillEntry[]> {
 	return Array.from(skillMap.values());
 }
 
+/**
+ * Load skills from an explicit list of directories.
+ *
+ * Unlike {@link loadSkills}, this does not require a full `DrMClawConfig`
+ * and does not include system skills. Intended for downstream products
+ * that resolve skill directories themselves (e.g. via workflow requests).
+ */
+export async function loadSkillsFromDirs(dirs: string[]): Promise<SkillEntry[]> {
+	const skillMap = new Map<string, SkillEntry>();
+	for (const dir of dirs) {
+		const resolved = resolve(dir);
+		await loadSkillsFromDir(resolved, resolved, skillMap);
+	}
+	return Array.from(skillMap.values());
+}
+
 async function loadSkillsFromDir(
 	dir: string,
 	source: string,

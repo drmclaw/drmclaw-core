@@ -26,21 +26,19 @@ export { PACKAGE_ROOT } from "./paths.js";
 
 // Skills
 export { loadSkills } from "./skills/loader.js";
+export { loadSkillsFromDirs } from "./skills/loader.js";
 export { resolveSystemSkillsDir } from "./skills/loader.js";
 export { findMissingRequires } from "./skills/check.js";
 export type { SkillEntry, SkillMetadata } from "./skills/types.js";
 
 // LLM
-export { createLLMAdapter } from "./llm/index.js";
 export type {
 	AdapterEvent,
 	LLMAdapter,
 	LLMAdapterRunOptions,
 	PermissionMode,
 } from "./llm/adapter.js";
-export { AcpSessionManager } from "./llm/acp-session.js";
 export type { AcpSession } from "./llm/acp-session.js";
-export { evaluatePermission } from "./llm/acp.js";
 
 // Runtime
 export { createAgentRuntime } from "./runtime/agent.js";
@@ -86,3 +84,7 @@ export { WebConnector } from "./connectors/web.js";
 // Server
 export { createApp } from "./server/app.js";
 export type { AppWithWebSocket } from "./server/app.js";
+
+// Task execution — downstream-facing execution surface for product repos
+export { executeTask } from "./task/execute.js";
+export type { ExecuteTaskRequest, ExecuteTaskResult } from "./task/execute.js";

@@ -196,21 +196,26 @@ server.on("upgrade", (req, socket, head) => {
 		return;
 	}
 
-	const backendSocket = connect(
-		{ host: backendUrl.hostname, port: Number(backendUrl.port), timeout: 5000 },
-		() => {
-			const reqLine = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
-			const headers = Object.entries(req.headers)
-				.map(([k, v]) => `${k}: ${v}`)
-				.join("\r\n");
-			backendSocket.write(`${reqLine}${headers}\r\n\r\n`);
-			if (head.length > 0) backendSocket.write(head);
-			socket.pipe(backendSocket).pipe(socket);
-		},
-	);
+	const backendSocket = connect({ host: backendUrl.hostname, port: Number(backendUrl.port) });
+	const handshakeTimeout = setTimeout(() => {
+		socket.destroy();
+		backendSocket.destroy();
+	}, 5000);
+
+	backendSocket.once("connect", () => {
+		const reqLine = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
+		const headers = Object.entries(req.headers)
+			.map(([k, v]) => `${k}: ${v}`)
+			.join("\r\n");
+		backendSocket.write(`${reqLine}${headers}\r\n\r\n`);
+		if (head.length > 0) backendSocket.write(head);
+		backendSocket.once("data", () => clearTimeout(handshakeTimeout));
+		socket.pipe(backendSocket).pipe(socket);
+	});
 	backendSocket.on("error", () => socket.destroy());
-	backendSocket.on("timeout", () => backendSocket.destroy());
+	backendSocket.on("close", () => clearTimeout(handshakeTimeout));
 	socket.on("error", () => backendSocket.destroy());
+	socket.on("close", () => backendSocket.destroy());
 });
 
 server.listen(PORT, () => {

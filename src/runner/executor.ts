@@ -29,6 +29,7 @@ export async function executeCommand(
 		cwd?: string;
 		allowlist?: Set<string>;
 		timeoutMs?: number;
+		maxBufferBytes?: number;
 	},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	const allowlist = options?.allowlist ?? DEFAULT_COMMAND_ALLOWLIST;
@@ -47,7 +48,7 @@ export async function executeCommand(
 			{
 				cwd: options?.cwd,
 				timeout: options?.timeoutMs ?? 30_000,
-				maxBuffer: 1024 * 1024, // 1 MB
+				maxBuffer: options?.maxBufferBytes ?? 1024 * 1024, // default 1 MB
 			},
 			(error, stdout, stderr) => {
 				if (error && !("code" in error)) {

@@ -15,6 +15,14 @@ It is designed for:
 - partners who want to build custom skills, connectors, and workflows,
 - builders who want to create domain-specific AI automation products on top of a reusable core.
 
+## Stability Model
+
+`drmclaw-core` is still evolving in both code and design.
+
+Today, the most actively shaped path is the ACP-backed task-execution runtime exposed through `executeTask()`. Other surfaces in the repo may continue to change as the architecture is simplified and clarified.
+
+That means compatibility is not guaranteed across design updates, and documented behavior should be interpreted as the current shipped model rather than a permanent long-term commitment for every surface.
+
 ## Architecture
 
 `drmclaw-core` is a TypeScript server that loads skills, routes prompts through pluggable LLM adapters, executes skill-based tasks, runs scheduled jobs, and exposes a developer console with real-time streaming.
@@ -70,6 +78,13 @@ It is designed for:
 - **HTTP + WebSocket Server** — Built on Hono. REST API for chat, tasks, skills, and job management. A `/ready` endpoint returns `503` while the server is still initializing and `200` once fully operational (suitable for container health probes and load balancers). WebSocket for real-time streaming with code-fence-aware chunking. Graceful shutdown on `SIGINT`/`SIGTERM`: drains in-flight tasks, rejects new work, then exits cleanly.
 - **Audit & Events** — Typed lifecycle events (`start`, `end`, `error`) emitted during task execution. Full execution records for review, compliance, and process optimization.
 - **Delivery Queue** — Write-ahead file-backed queue for reliable outbound delivery. Entries are persisted to disk before delivery is attempted, ensuring crash recovery. Two-phase atomic ack (rename then unlink), exponential backoff retry, and startup recovery of pending entries. Generic payload type — connectors deliver any shape.
+- **Task Executor** — Downstream-facing execution surface for product repos. Products call `executeTask` with a constrained `ExecuteTaskRequest` (prompt, skill directories, execution policy, config overrides). Core loads the real drmclaw-core config file (via `loadDrMClawConfig`), merges request-level overrides on top, then composes the full LLM-native runtime chain: `createLLMAdapter` → `createAgentRuntime` → `TaskRunner`. The configured ACP CLI is the process that runs — no child processes are spawned outside the ACP session. Returns a structured `ExecuteTaskResult` with the agent's output, task ID, duration, provider/model metadata, and in-memory collected events. Types are domain-agnostic — no product or vertical concepts leak in. All setup failures (config loading, skill discovery, adapter creation) are caught inside a structured error boundary — `executeTask` never rejects; it always returns an `ExecuteTaskResult` with `status: "error"`. One-off executions clean up ACP adapter resources via `dispose()` in a `finally` block.
+
+  **Runtime path:** Task execution traverses the same `AgentRuntime` → `TaskRunner` infrastructure used by all other execution paths in the engine. Products pass a prompt + policy — no subprocess wiring leaks to the product. Skills are loaded from the resolved config (system skills + `config.skills.dirs`) first; `request.skillDirs` is merged additively with deduplication (config-driven skills take precedence by name). The combined set is optionally filtered by a skill allowlist. The `TaskRunner` generates a UUID task ID, assembles the system prompt, invokes the `AcpRuntime`, collects lifecycle events, and returns a `TaskRecord`. Products can pass an `onEvent` callback to observe runtime events during execution. Optional `timeoutMs` and `maxOutputChars` guardrails are available for constrained runs. Timeout triggers real ACP adapter disposal so the subprocess is torn down — not just a promise race — and the returned events array is a stable snapshot immune to post-timeout mutation. The result includes `provider` and `requestedModel` fields. Failure results preserve best-effort `taskId` and non-zero `durationMs` when events were already collected, so failed executions remain diagnosable.
+
+  **Event persistence:** `executeTask` collects events in-memory only — no durable `EventStore` is wired in this path. The `PersistedRuntimeEvent` envelope type is reused for structural compatibility with the server-side `JsonlEventStore`, but events are not written to disk. The server/CLI bootstrap (`src/cli.ts`) attaches `JsonlEventStore` to the `TaskRunner` separately. Products that need durable event persistence should forward the returned `events` array to their own store.
+
+  **Constrained policy surface:** `ExecuteTaskRequest.policy` intentionally exposes only `permissionMode` and `skillAllowlist`. The broader runtime policy fields (`filePatterns`, `commandAllowlist`, `maxSteps`) are available in the underlying `CommonExecutionPolicy` / `ExecutionPolicy` types but are not surfaced through `executeTask`. Products that need fine-grained policy control should compose `createAgentRuntime` + `TaskRunner` directly.
 
 ## What Lives Here
 
@@ -90,6 +105,37 @@ The public core includes:
 - task queue with lane serialization,
 - bundled system skills and examples,
 - self-host templates and deployment guides.
+
+### Public vs Internal API
+
+The package exports (`drmclaw-core`, `drmclaw-core/sdk`, `drmclaw-core/connectors`) define the public contract. Products and integrators should only depend on symbols exported from these entry points.
+
+This contract is still evolving. The ACP-backed task-execution path is the current priority surface. Other exported or documented surfaces may change as the codebase is simplified or the architecture is clarified.
+
+**Public — stable contract for product repos:**
+
+| Symbol | Purpose |
+|---|---|
+| `executeTask` | LLM-native task execution surface for products |
+| `ExecuteTaskRequest`, `ExecuteTaskResult` | Task execution types |
+| `loadDrMClawConfig`, `resolveConfigFile`, `defineConfig`, `configSchema` | Config loading and validation |
+| `createAgentRuntime` | Agent runtime factory (self-host / framework setup) |
+| `TaskRunner` | Task orchestration (self-host / framework setup) |
+| `createApp` | HTTP + WebSocket server factory |
+| `loadSkills`, `loadSkillsFromDirs`, `resolveSystemSkillsDir` | Skill discovery |
+| `CronService`, `JsonlEventStore`, `FileDeliveryQueue` | Infrastructure services |
+| `WebConnector` | WebSocket connector |
+| All exported `type` declarations | Type contracts for custom adapters, runtimes, connectors |
+
+**Internal — not exported, implementation details:**
+
+| Symbol | Reason |
+|---|---|
+| `AcpSessionManager` | ACP process lifecycle; internal to the LLM adapter layer |
+| `createLLMAdapter` | Internal factory; composed by `executeTask` and CLI bootstrap, products don't need it |
+| `evaluatePermission` | ACP protocol detail; internal to the adapter |
+
+Products that need to execute skills should use `executeTask()`. Products that need to customize the runtime should use `createAgentRuntime()` + `TaskRunner`. Lower-level symbols are internal and may change without notice.
 
 ## Tech Stack
 
@@ -236,12 +282,13 @@ All tests run via `pnpm test` with no external dependencies (no real LLM provide
 | `executor.test.ts` | Task execution and queue integration |
 | `queue.test.ts` | Task queue: concurrency, bounded overflow, graceful drain |
 | `integration.test.ts` | End-to-end composed runtime paths, prompt round-trip, `/ready` endpoint (200/503 states) |
-| `entrypoint.test.ts` | Package exports and entry points |
 | `event-store.test.ts` | JSONL event store, persistence, WebSocket broadcasting |
 | `delivery-queue.test.ts` | Delivery queue: write-ahead enqueue, two-phase ack, fail/retry, crash recovery, concurrent operations |
 | `debug-display-utils.test.ts` | Developer console display grouping: stream/thinking collapse, toolCallId-based tool-call grouping, interleaved parallel tool events |
 | `ui-build.test.ts` | UI production build: correct asset paths, no duplicate CSS, all referenced assets exist |
 | `ws-message-filtering.test.ts` | WebSocket message gating: task-scoped event filtering, stale-result acknowledgment |
+| `execute-task.test.ts` | Task executor: config loading via `loadDrMClawConfig`, runtime chain composition, in-memory event collection, policy forwarding, skill allowlist filtering (effective skills assertion), config-driven skill precedence over request skills, additive merge for unique request skills, config overrides, provider/model metadata, adapter dispose cleanup, timeout abort with real ACP disposal, output truncation, failure-evidence preservation, structured error boundary (config failure, skill failure, adapter creation failure), post-timeout event snapshot stability, no durable persistence (in-memory only) |
+| `entrypoint.test.ts` | Source-barrel regression: `"."` barrel symbols (factory functions, classes, task executor), `"./sdk"` barrel symbols (types, utilities), `"./connectors"` barrel symbols (connector classes, registry), removed-export regression guards (`createLLMAdapter`, `AcpSessionManager`, `evaluatePermission` must not be exported). Built-package surface (dist-gated, runs after `pnpm build`): exercises the real `dist/index.js`, `dist/sdk.js`, `dist/connectors.js` entrypoints declared in package.json `exports`; skipped when dist/ is absent so `pnpm test` stays build-free. |
 
 ### Skills Hardening
 
@@ -354,6 +401,7 @@ The developer console is a 2-column debug view: **User Chat** (left — conversa
 
 ### Prerequisites
 
+- **macOS or Linux** — Windows is not supported at this phase
 - Node.js 22+
 - pnpm
 - An ACP-compatible CLI (default: GitHub Copilot CLI, authenticated via `gh auth login`) for the default LLM adapter
