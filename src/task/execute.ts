@@ -27,13 +27,13 @@ import type { z } from "zod";
 import { loadDrMClawConfig } from "../config/loader.js";
 import type { DrMClawConfig, configSchema } from "../config/schema.js";
 import type { PersistedRuntimeEvent } from "../events/types.js";
-import type { LLMAdapter } from "../llm/adapter.js";
-import { createLLMAdapter } from "../llm/index.js";
-import { TaskRunner } from "../runner/runner.js";
-import type { TaskRecord } from "../runner/types.js";
-import { createAgentRuntime } from "../runtime/agent.js";
 import type { RuntimeEvent } from "../runtime/types.js";
-import { loadSkills, loadSkillsFromDirs } from "../skills/loader.js";
+import {
+	type SkillResolutionError,
+	formatSkillResolutionErrors,
+	resolveSkillsForRequest,
+} from "../skills/resolve.js";
+import { runPromptViaRuntime } from "./runtime-chain.js";
 
 /**
  * A constrained task request submitted by a downstream product.
@@ -132,6 +132,14 @@ export interface ExecuteTaskResult {
 
 	/** Model that was requested via config override or loaded config. */
 	requestedModel?: string;
+
+	/**
+	 * Structured skill-resolution errors when an explicitly skill-scoped
+	 * request could not be satisfied. Populated only on fail-closed
+	 * errors raised before runtime assembly — a `status: "error"` result
+	 * with this field set means the ACP runtime never started.
+	 */
+	skillResolutionErrors?: SkillResolutionError[];
 }
 
 /**
@@ -168,15 +176,8 @@ export async function executeTask(
 		};
 	}
 
-	const events: PersistedRuntimeEvent[] = [];
 	const startTime = Date.now();
-	let lastTaskId = "";
 	let config: DrMClawConfig | undefined;
-	let adapter: LLMAdapter | undefined;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	// Gate that prevents late events from the abandoned run promise
-	// from mutating the snapshot after timeout/completion.
-	let accepting = true;
 
 	try {
 		// 1. Build config — load real config file, merge request overrides on top
@@ -189,103 +190,58 @@ export async function executeTask(
 		}
 		config = await loadDrMClawConfig(overrides as Partial<DrMClawConfig>);
 
-		// 2. Load skills — config-driven (system + config.skills.dirs),
-		//    then merge request.skillDirs additively with dedup.
-		let skills = await loadSkills(config);
-		if (request.skillDirs && request.skillDirs.length > 0) {
-			const requestSkills = await loadSkillsFromDirs(request.skillDirs);
-			const seen = new Set(skills.map((s) => s.name));
-			for (const s of requestSkills) {
-				if (!seen.has(s.name)) {
-					skills.push(s);
-					seen.add(s.name);
-				}
-			}
-		}
-
-		// 3. Apply skill allowlist — only include allowed skills in agent context
-		if (request.policy?.skillAllowlist && request.policy.skillAllowlist.length > 0) {
-			const allowSet = new Set(request.policy.skillAllowlist);
-			skills = skills.filter((s) => allowSet.has(s.name));
-		}
-
-		// 4. Compose the LLM-native runtime chain
-		adapter = createLLMAdapter(config);
-		const runtime = createAgentRuntime(config, adapter);
-		const runner = new TaskRunner(config, runtime, skills);
-
-		// 5. Run — collect events in memory (no durable EventStore in this path)
-		const runPromise = runner.run(request.prompt, {
-			workingDir: request.workingDir,
-			onEvent: (event) => {
-				if (!accepting) return;
-				options?.onEvent?.(event);
-			},
-			onPersistedEvent: (event) => {
-				if (!accepting) return;
-				events.push(event);
-				if (event.taskId) lastTaskId = event.taskId;
-			},
+		// 2. Resolve skills — merge config-driven + request dirs, dedup,
+		//    and (when an allowlist is declared) enforce the explicit
+		//    skill-scope contract. Fail closed before runtime assembly if
+		//    the scope cannot be satisfied.
+		const resolution = await resolveSkillsForRequest({
+			config,
+			skillDirs: request.skillDirs,
+			skillAllowlist: request.policy?.skillAllowlist,
 		});
 
-		let record: TaskRecord;
-		if (request.timeoutMs && request.timeoutMs > 0) {
-			const timeoutPromise = new Promise<never>((_, reject) => {
-				timer = setTimeout(() => {
-					// Stop accepting late events before disposal
-					accepting = false;
-					// Trigger real ACP teardown so the subprocess is killed.
-					// Fire-and-forget: the adapter is cleaned up, but we don't
-					// block the timeout rejection on it.
-					if (adapter) {
-						Promise.resolve(adapter.dispose()).catch(() => {});
-						adapter = undefined; // prevent double-dispose in finally
-					}
-					reject(new Error(`Task timed out after ${request.timeoutMs}ms`));
-				}, request.timeoutMs);
-			});
-
-			record = await Promise.race([runPromise, timeoutPromise]);
-		} else {
-			record = await runPromise;
+		if (resolution.errors.length > 0) {
+			return {
+				status: "error",
+				output: "",
+				error: formatSkillResolutionErrors(resolution.errors),
+				durationMs: Date.now() - startTime,
+				taskId: "",
+				events: [],
+				provider: config.llm.provider,
+				requestedModel: config.llm.model,
+				skillResolutionErrors: resolution.errors,
+			};
 		}
 
-		// Stop accepting events after successful completion
-		accepting = false;
-
-		let output = record.result.output;
-		if (request.maxOutputChars && output.length > request.maxOutputChars) {
-			output = output.slice(0, request.maxOutputChars);
-		}
+		// 3-5. Compose runtime chain, run, and clean up via shared helper.
+		const runResult = await runPromptViaRuntime({
+			prompt: request.prompt,
+			config,
+			skills: resolution.skills,
+			workingDir: request.workingDir,
+			timeoutMs: request.timeoutMs,
+			maxOutputChars: request.maxOutputChars,
+			onEvent: options?.onEvent,
+			startTime,
+		});
 
 		return {
-			status: record.result.status === "completed" ? "completed" : "error",
-			output,
-			error: record.result.error,
-			durationMs: record.result.durationMs,
-			taskId: record.id,
-			events: [...events],
+			...runResult,
 			provider: config.llm.provider,
 			requestedModel: config.llm.model,
 		};
 	} catch (err) {
-		accepting = false;
 		const message = err instanceof Error ? err.message : String(err);
 		return {
 			status: "error",
 			output: "",
 			error: message,
 			durationMs: Date.now() - startTime,
-			taskId: lastTaskId,
-			events: [...events],
+			taskId: "",
+			events: [],
 			provider: config?.llm.provider ?? "",
 			requestedModel: config?.llm.model,
 		};
-	} finally {
-		// 6. Clean up: cancel pending timeout timer and dispose ACP adapter
-		clearTimeout(timer);
-		if (adapter) {
-			await adapter.dispose();
-		}
 	}
 }

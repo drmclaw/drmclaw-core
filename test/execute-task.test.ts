@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configSchema } from "../src/config/schema.js";
 import type { PersistedRuntimeEvent } from "../src/events/types.js";
@@ -400,7 +401,10 @@ describe("executeTask", () => {
 
 		await executeTask({
 			prompt: "combined",
-			skillDirs: ["/extra"],
+			// Use a real existing directory so fs.stat passes the scope-
+			// contract check; loadSkillsFromDirs is mocked so no real
+			// skills are read from it.
+			skillDirs: [tmpdir()],
 			policy: { skillAllowlist: ["a", "c"] },
 		});
 
@@ -540,5 +544,163 @@ describe("executeTask", () => {
 
 		expect(result.status).toBe("error");
 		expect(result.error).toBe("string-throw");
+	});
+
+	// -----------------------------------------------------------------------
+	// Fail-closed skill scope: explicit skillAllowlist is a contract
+	// -----------------------------------------------------------------------
+
+	describe("fail-closed skill scope", () => {
+		it("returns SKILL_ROOT_MISSING when a request skillDir does not exist on disk", async () => {
+			mockLoadSkills.mockResolvedValue([]);
+			mockLoadSkillsFromDirs.mockResolvedValue([]);
+			simulateSuccessfulRun();
+
+			const ghost = "/definitely/not/a/real/path/drmclaw-ghost";
+			const result = await executeTask({
+				prompt: "reload tickets",
+				skillDirs: [ghost],
+				policy: { skillAllowlist: ["jira"] },
+			});
+
+			expect(result.status).toBe("error");
+			expect(result.error).toMatch(/Skill scope unsatisfied/);
+			expect(result.skillResolutionErrors).toBeDefined();
+			const rootMissing = result.skillResolutionErrors?.find(
+				(e) => e.code === "SKILL_ROOT_MISSING",
+			);
+			expect(rootMissing).toBeDefined();
+			expect(rootMissing?.skillDirs).toEqual([ghost]);
+			// Runtime must not have been invoked when scope failed.
+			expect(mockRuntimeRun).not.toHaveBeenCalled();
+			expect(result.taskId).toBe("");
+			expect(result.events).toEqual([]);
+		});
+
+		it("does NOT emit SKILL_ROOT_MISSING when skillDir exists but holds a different skill", async () => {
+			// Directory is readable, skill discovery just returns a different
+			// skill. That's a SKILL_NOT_FOUND, not a root-missing condition.
+			mockLoadSkills.mockResolvedValue([]);
+			mockLoadSkillsFromDirs.mockResolvedValue([skill("unrelated")]);
+			simulateSuccessfulRun();
+
+			const result = await executeTask({
+				prompt: "reload tickets",
+				skillDirs: [tmpdir()],
+				policy: { skillAllowlist: ["jira"] },
+			});
+
+			expect(result.status).toBe("error");
+			const codes = result.skillResolutionErrors?.map((e) => e.code) ?? [];
+			expect(codes).not.toContain("SKILL_ROOT_MISSING");
+			expect(codes).toContain("SKILL_NOT_FOUND");
+			expect(mockRuntimeRun).not.toHaveBeenCalled();
+		});
+
+		it("returns SKILL_NOT_FOUND when an allowlisted skill is missing after discovery", async () => {
+			mockLoadSkills.mockResolvedValue([skill("git")]);
+			mockLoadSkillsFromDirs.mockResolvedValue([]);
+			simulateSuccessfulRun();
+
+			const result = await executeTask({
+				prompt: "reload tickets",
+				policy: { skillAllowlist: ["jira"] },
+			});
+
+			expect(result.status).toBe("error");
+			const codes = result.skillResolutionErrors?.map((e) => e.code) ?? [];
+			expect(codes).toContain("SKILL_NOT_FOUND");
+			expect(result.skillResolutionErrors?.find((e) => e.code === "SKILL_NOT_FOUND")?.skill).toBe(
+				"jira",
+			);
+			expect(mockRuntimeRun).not.toHaveBeenCalled();
+		});
+
+		it("returns SKILL_NOT_READY when the allowlisted skill is present but unready", async () => {
+			const unreadyJira: SkillEntry = {
+				...skill("jira"),
+				ready: false,
+				missingRequires: ["python3"],
+			};
+			mockLoadSkills.mockResolvedValue([unreadyJira]);
+			simulateSuccessfulRun();
+
+			const result = await executeTask({
+				prompt: "reload tickets",
+				policy: { skillAllowlist: ["jira"] },
+			});
+
+			expect(result.status).toBe("error");
+			const notReady = result.skillResolutionErrors?.find((e) => e.code === "SKILL_NOT_READY");
+			expect(notReady).toBeDefined();
+			expect(notReady?.skill).toBe("jira");
+			expect(notReady?.missingRequires).toEqual(["python3"]);
+			expect(mockRuntimeRun).not.toHaveBeenCalled();
+		});
+
+		it("succeeds when an allowlisted skill is discovered and ready", async () => {
+			mockLoadSkills.mockResolvedValue([skill("git")]);
+			mockLoadSkillsFromDirs.mockResolvedValue([skill("jira")]);
+			simulateSuccessfulRun();
+
+			const result = await executeTask({
+				prompt: "reload tickets",
+				// Real existing directory: loadSkillsFromDirs is mocked to
+				// return the jira skill, so the scope contract is satisfied.
+				skillDirs: [tmpdir()],
+				policy: { skillAllowlist: ["jira"] },
+			});
+
+			expect(result.status).toBe("completed");
+			expect(result.skillResolutionErrors).toBeUndefined();
+			// Only the allowlisted skill reaches the runtime.
+			const names = capturedRuntimeSkills().map((s) => s.name);
+			expect(names).toEqual(["jira"]);
+		});
+
+		it("does not enforce the scope contract when no allowlist is declared", async () => {
+			// Without an allowlist the caller is giving the agent free pick of
+			// discovered skills, so missing names or unready skills must not
+			// fail closed.
+			mockLoadSkills.mockResolvedValue([
+				{ ...skill("needs-stuff"), ready: false, missingRequires: ["foo"] },
+			]);
+			simulateSuccessfulRun();
+
+			const result = await executeTask({ prompt: "anything" });
+
+			expect(result.status).toBe("completed");
+			expect(result.skillResolutionErrors).toBeUndefined();
+		});
+
+		it("emits SKILL_NOT_FOUND only (no SKILL_NOT_READY) when one allowlisted skill is missing and another is unready", async () => {
+			// Precedence end-to-end: SKILL_NOT_FOUND wins over SKILL_NOT_READY
+			// for the same request, even though both classes apply per-name.
+			const unreadyJira: SkillEntry = {
+				...skill("jira"),
+				ready: false,
+				missingRequires: ["python3"],
+			};
+			mockLoadSkills.mockResolvedValue([unreadyJira]);
+			mockLoadSkillsFromDirs.mockResolvedValue([]);
+			simulateSuccessfulRun();
+
+			const result = await executeTask({
+				prompt: "reload tickets",
+				// Real existing dir so the SKILL_ROOT_MISSING check passes.
+				skillDirs: [tmpdir()],
+				policy: { skillAllowlist: ["confluence", "jira"] },
+			});
+
+			expect(result.status).toBe("error");
+			const codes = result.skillResolutionErrors?.map((e) => e.code) ?? [];
+			expect(codes.length).toBeGreaterThan(0);
+			expect(codes.every((c) => c === "SKILL_NOT_FOUND")).toBe(true);
+			expect(codes).not.toContain("SKILL_NOT_READY");
+			expect(result.skillResolutionErrors?.find((e) => e.code === "SKILL_NOT_FOUND")?.skill).toBe(
+				"confluence",
+			);
+			expect(mockRuntimeRun).not.toHaveBeenCalled();
+		});
 	});
 });

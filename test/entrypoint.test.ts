@@ -68,6 +68,15 @@ describe("source barrel: index.ts", () => {
 		expect(typeof mod.PACKAGE_ROOT).toBe("string");
 	});
 
+	it("re-exports skill action types (type-level)", () => {
+		// Types erase at runtime; compilation is the assertion.
+		type _Entry = import("../src/index.js").SkillEntry;
+		type _Meta = import("../src/index.js").SkillMetadata;
+		type _Action = import("../src/index.js").SkillAction;
+		type _ActionInput = import("../src/index.js").SkillActionInput;
+		expect(true).toBe(true);
+	});
+
 	it("does NOT export removed internal symbols", async () => {
 		const mod = await import("../src/index.js");
 		const keys = Object.keys(mod);
@@ -100,6 +109,15 @@ describe("source barrel: sdk.ts", () => {
 	it("exports defineConfig helper", async () => {
 		const mod = await import("../src/sdk.js");
 		expect(typeof mod.defineConfig).toBe("function");
+	});
+
+	it("re-exports skill action types (type-level)", () => {
+		// Types erase at runtime; compilation is the assertion.
+		type _Entry = import("../src/sdk.js").SkillEntry;
+		type _Meta = import("../src/sdk.js").SkillMetadata;
+		type _Action = import("../src/sdk.js").SkillAction;
+		type _ActionInput = import("../src/sdk.js").SkillActionInput;
+		expect(true).toBe(true);
 	});
 });
 

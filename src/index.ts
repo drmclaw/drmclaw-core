@@ -29,7 +29,11 @@ export { loadSkills } from "./skills/loader.js";
 export { loadSkillsFromDirs } from "./skills/loader.js";
 export { resolveSystemSkillsDir } from "./skills/loader.js";
 export { findMissingRequires } from "./skills/check.js";
-export type { SkillEntry, SkillMetadata } from "./skills/types.js";
+export type { SkillAction, SkillActionInput, SkillEntry, SkillMetadata } from "./skills/types.js";
+export type {
+	SkillResolutionError,
+	SkillResolutionErrorCode,
+} from "./skills/resolve.js";
 
 // LLM
 export type {
@@ -88,3 +92,11 @@ export type { AppWithWebSocket } from "./server/app.js";
 // Task execution — downstream-facing execution surface for product repos
 export { executeTask } from "./task/execute.js";
 export type { ExecuteTaskRequest, ExecuteTaskResult } from "./task/execute.js";
+export { executeSkillAction } from "./task/action.js";
+export type {
+	ActionValidationError,
+	ExecuteSkillActionRequest,
+	ExecuteSkillActionResult,
+} from "./task/action.js";
+export { buildExecuteSkillActionRequest } from "./task/request.js";
+export type { SkillActionCallSpec } from "./task/request.js";

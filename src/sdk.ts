@@ -5,7 +5,7 @@
  */
 
 // Skill types & utilities
-export type { SkillEntry, SkillMetadata } from "./skills/types.js";
+export type { SkillAction, SkillActionInput, SkillEntry, SkillMetadata } from "./skills/types.js";
 export { findMissingRequires } from "./skills/check.js";
 
 // Delivery types
@@ -53,3 +53,15 @@ export type { CronJob } from "./scheduler/types.js";
 // Config types
 export type { CliProvider, DrMClawConfig, EmbeddedProvider, LLMProvider } from "./config/schema.js";
 export { defineConfig } from "./config/schema.js";
+
+// Task execution surfaces
+export { executeTask } from "./task/execute.js";
+export type { ExecuteTaskRequest, ExecuteTaskResult } from "./task/execute.js";
+export { executeSkillAction } from "./task/action.js";
+export type {
+	ActionValidationError,
+	ExecuteSkillActionRequest,
+	ExecuteSkillActionResult,
+} from "./task/action.js";
+export { buildExecuteSkillActionRequest } from "./task/request.js";
+export type { SkillActionCallSpec } from "./task/request.js";
