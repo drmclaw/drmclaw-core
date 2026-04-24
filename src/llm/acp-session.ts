@@ -60,6 +60,20 @@ export function isModelAllowed(modelId: string, excludePatterns: readonly string
 }
 
 /**
+ * Return the GitHub Copilot-specific `reasoning_effort` config option ID when
+ * the agent advertises it. We intentionally require the exact Copilot option
+ * name rather than inferring from the generic `thought_level` category because
+ * other agents may use different IDs or semantics.
+ */
+export function getGithubCopilotReasoningEffortConfigId(session: {
+	configOptions?: ReadonlyArray<{ id?: string }>;
+}): "reasoning_effort" | null {
+	return session.configOptions?.some((opt) => opt.id === "reasoning_effort")
+		? "reasoning_effort"
+		: null;
+}
+
+/**
  * Mutable client delegate — allows swapping per-run callbacks on a
  * long-lived ACP connection.
  *
@@ -133,6 +147,12 @@ export class AcpSessionManager {
 		const effectiveModel =
 			options?.model ??
 			(provider === "github-copilot" ? acpCfg.githubCopilot.defaultModel : undefined);
+
+		// Resolve the effective reasoning effort (currently only github-copilot).
+		// Applied per-session via ACP `session/set_config_option` after newSession
+		// returns — Copilot CLI silently ignores a `--effort` flag in `--acp` mode.
+		const effectiveEffort =
+			provider === "github-copilot" ? acpCfg.githubCopilot.reasoningEffort : undefined;
 
 		const { command, args } = resolveAcpCommandArgs(provider, acpCfg, options?.model);
 
@@ -225,6 +245,23 @@ export class AcpSessionManager {
 				});
 			} catch {
 				// Best-effort — the session proceeds with whatever model the agent chose.
+			}
+		}
+
+		// Apply reasoning effort via GitHub Copilot's ACP session config option.
+		// This is intentionally provider-specific: other ACP agents may expose a
+		// different option ID or different values, so we only target the exact
+		// Copilot `reasoning_effort` selector when it is advertised.
+		const reasoningEffortConfigId = getGithubCopilotReasoningEffortConfigId(session);
+		if (effectiveEffort && reasoningEffortConfigId) {
+			try {
+				await connection.setSessionConfigOption({
+					sessionId: session.sessionId,
+					configId: reasoningEffortConfigId,
+					value: effectiveEffort,
+				});
+			} catch {
+				// Best-effort — session proceeds with the agent's default effort.
 			}
 		}
 

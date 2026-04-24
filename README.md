@@ -189,7 +189,7 @@ Configuration uses **provider** as the single user-facing axis. The provider ID 
 
 | Provider ID | Default command | Default args | Notes |
 | --- | --- | --- | --- |
-| `github-copilot` (default) | `copilot` | `--acp --stdio` | `githubCopilot.defaultModel` appended as `--model` |
+| `github-copilot` (default) | `copilot` | `--acp --stdio` | `githubCopilot.defaultModel` appended as `--model`; `githubCopilot.reasoningEffort` applied per-session via ACP `session/set_config_option` for Copilot GPT-5.4 |
 | `claude-cli` | `claude` | `--acp --stdio` | |
 | `openai-cli` | `openai` | `--acp --stdio` | |
 | `gemini-cli` | `gemini` | `--acp --stdio` | |
@@ -213,6 +213,7 @@ llm: {
 		githubCopilot: {
 			defaultModel: "gpt-5.4",   // fallback when llm.model is not set
 			// Available models are auto-discovered from the agent at startup.
+			reasoningEffort: "high",   // low | medium | high (GPT-5.4 via ACP; agent default is "medium")
 		},
 		mcpServers: [                  // forwarded to the ACP agent's newSession call
 			{
@@ -228,6 +229,40 @@ llm: {
 ```
 
 Resolution is handled by `resolveAcpCommandArgs(provider, acpCfg, modelOverride?)`, which returns `{ command, args }` ready for `spawn()`. Model precedence: `llm.model` > `githubCopilot.defaultModel` > none. Explicit `--model` in custom `args` is never overridden. The helper `isCliProvider(provider)` determines whether a provider routes through ACP.
+
+#### Reasoning Effort (GPT-5.4 via github-copilot)
+
+For GitHub Copilot CLI sessions pinned to GPT-5.4, the effective reasoning budget is controlled by `llm.acp.githubCopilot.reasoningEffort` (`"low" | "medium" | "high"`). The agent's built-in default is `"medium"`.
+
+**The effort setting must be applied through the ACP protocol, not the CLI.** This was re-validated against Copilot CLI 1.0.35:
+
+- Copilot CLI's `--effort` / `--reasoning-effort` global flag **is silently ignored in `--acp` mode**. Passing `copilot --acp --stdio --effort high ...` produces a debug log showing `Final request options: { "reasoning_effort": "medium" }` — the flag is dropped on the floor.
+- Copilot's `~/.copilot/config.json` has **no** `effort` / `reasoningEffort` / `effortLevel` key (`copilot help config` enumerates the full schema; none exists).
+- No Copilot environment variable controls effort (`copilot help environment` shows `COPILOT_MODEL`, `COPILOT_PROVIDER_*`, but nothing for effort).
+- Encoded model strings such as `--model capi:gpt-5.4:defaultReasoningEffort=high` are rejected: `[WARNING] Selected model ... is not available. Falling back to gpt-5.4`.
+- The **only** mechanism that works is the ACP protocol's `session/set_config_option` method. After `session/new`, the Copilot agent advertises a `configOption` with `id: "reasoning_effort"`, `category: "thought_level"`, and values `low | medium | high`. Setting `high` flips the provider request's `reasoning_effort` to `high`.
+- `xhigh` does **not** work for Copilot GPT-5.4. A live ACP probe against Copilot CLI 1.0.35 returned `Invalid reasoning_effort 'xhigh'. Supported values: low, medium, high.` before the prompt was sent.
+
+`AcpSessionManager.acquire()` performs this automatically for `provider: "github-copilot"` whenever `reasoningEffort` is configured and the Copilot session advertises `configId: "reasoning_effort"`:
+
+```jsonc
+// Sent by drmclaw-core after session/new:
+{
+  "jsonrpc": "2.0",
+  "method": "session/set_config_option",
+  "params": {
+    "sessionId": "<id>",
+    "configId": "reasoning_effort",  // NOT "optionId" — Copilot returns "Internal error" otherwise
+    "value": "high"
+  }
+}
+```
+
+The call is best-effort: if Copilot does not advertise `reasoning_effort` (older builds) or the request errors, the session proceeds with the agent's default effort rather than failing.
+
+This implementation is intentionally provider-specific. Other ACP CLIs or future models may expose a different config ID or different allowed values, so drmclaw-core does not infer compatibility from the generic `thought_level` category.
+
+**Verifying end-to-end**: run Copilot with `--log-level debug --log-dir <dir>`, execute a prompt, and grep the resulting `process-*.log` for the `Final request options` block — for a supported setting like `high`, the `reasoning_effort` field there reflects what actually reaches the provider.
 
 #### Runtime Model Switching
 

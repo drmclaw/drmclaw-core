@@ -29,10 +29,35 @@ export function isCliProvider(provider: LLMProvider): provider is CliProvider {
 	return (cliProviderIds as readonly string[]).includes(provider);
 }
 
+/**
+ * Reasoning effort level supported by GitHub Copilot CLI for GPT-5.4 ACP sessions.
+ *
+ * Applied per-session via the ACP `session/set_config_option` method
+ * (configId = "reasoning_effort") after the session is created.
+ *
+ * NOTE: Copilot CLI's `--effort` / `--reasoning-effort` global flag is
+ * silently ignored in `--acp` mode (as of Copilot CLI 1.0.35) — the flag
+ * only affects one-shot `copilot -p` invocations. Setting effort for an
+ * ACP session MUST go through the protocol-level config option.
+ *
+ * This schema is intentionally scoped to the values currently advertised by
+ * GitHub Copilot CLI for GPT-5.4: `low`, `medium`, and `high`. Other ACP
+ * agents or future models may expose a different option ID or different
+ * values and should be handled separately.
+ */
+export const reasoningEffortSchema = z.enum(["low", "medium", "high"]);
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+
 /** GitHub Copilot-specific ACP settings. */
 export const githubCopilotConfigSchema = z
 	.object({
 		defaultModel: z.string().optional(),
+		/**
+		 * Reasoning effort applied to each new session via the ACP
+		 * `session/set_config_option` method. Omit to use the agent's
+		 * default (currently `medium` for GitHub Copilot CLI GPT-5.4).
+		 */
+		reasoningEffort: reasoningEffortSchema.optional(),
 	})
 	.default({});
 
@@ -89,11 +114,18 @@ export function resolveAcpCommandArgs(
 		modelOverride ??
 		(provider === "github-copilot" ? acpCfg.githubCopilot.defaultModel : undefined);
 
-	if (model && !baseArgs.includes("--model")) {
-		return { command, args: [...baseArgs, "--model", model] };
+	const args = [...baseArgs];
+
+	if (model && !args.includes("--model")) {
+		args.push("--model", model);
 	}
 
-	return { command, args: baseArgs };
+	// NOTE: Reasoning effort is intentionally NOT forwarded as a CLI flag.
+	// Copilot CLI's `--effort` is silently ignored in `--acp` mode; the
+	// effort must be applied per-session via `session/set_config_option`
+	// after the session is created (see AcpSessionManager.acquire).
+
+	return { command, args };
 }
 
 /** Full application config schema. */

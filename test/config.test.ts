@@ -260,6 +260,51 @@ describe("resolveAcpCommandArgs", () => {
 		);
 		expect(args).toEqual(["--acp", "--stdio", "--model", "pinned"]);
 	});
+
+	it("does NOT forward reasoningEffort as a CLI flag (Copilot ignores --effort in --acp mode)", () => {
+		const { args } = resolveAcpCommandArgs("github-copilot", {
+			githubCopilot: { reasoningEffort: "high" },
+			mcpServers: [],
+		});
+		// Effort is applied via ACP `session/set_config_option`, not the CLI.
+		expect(args).toEqual(["--acp", "--stdio"]);
+		expect(args).not.toContain("--effort");
+		expect(args).not.toContain("--reasoning-effort");
+	});
+
+	it("appends --model but never --effort when both are configured", () => {
+		const { args } = resolveAcpCommandArgs("github-copilot", {
+			githubCopilot: { defaultModel: "gpt-5.4", reasoningEffort: "high" },
+			mcpServers: [],
+		});
+		expect(args).toEqual(["--acp", "--stdio", "--model", "gpt-5.4"]);
+	});
+
+	it("ignores reasoningEffort for non-copilot CLI providers (no CLI flag either)", () => {
+		const { args } = resolveAcpCommandArgs("claude-cli", {
+			// biome-ignore lint/suspicious/noExplicitAny: exercising provider-gating
+			githubCopilot: { reasoningEffort: "high" } as any,
+			mcpServers: [],
+		});
+		expect(args).toEqual(["--acp", "--stdio"]);
+	});
+
+	it("accepts reasoningEffort via schema round-trip without polluting CLI args", () => {
+		const parsed = acpConfigSchema.parse({
+			githubCopilot: { defaultModel: "gpt-5.4", reasoningEffort: "high" },
+		});
+		const { args } = resolveAcpCommandArgs("github-copilot", parsed);
+		expect(args).toEqual(["--acp", "--stdio", "--model", "gpt-5.4"]);
+		expect(parsed.githubCopilot.reasoningEffort).toBe("high");
+	});
+
+	it("rejects xhigh because Copilot GPT-5.4 only advertises low/medium/high", () => {
+		expect(() =>
+			acpConfigSchema.parse({
+				githubCopilot: { defaultModel: "gpt-5.4", reasoningEffort: "xhigh" },
+			}),
+		).toThrow();
+	});
 });
 
 describe("defineConfig", () => {

@@ -39,6 +39,9 @@ export default defineConfig({
 			githubCopilot: {
 				// defaultModel: "gpt-5.4",      // fallback when llm.model is not set
 				// Available models are auto-discovered from the agent at startup.
+				// reasoningEffort: "high",      // applied via ACP `session/set_config_option`
+				//                                  (choices currently validated for GPT-5.4:
+				//                                   low | medium | high; agent default is medium)
 			},
 			// MCP servers to forward to the ACP agent on session creation:
 			// mcpServers: [

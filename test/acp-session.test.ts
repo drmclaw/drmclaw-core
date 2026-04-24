@@ -8,6 +8,7 @@ import {
 	AcpSessionManager,
 	type ClientDelegate,
 	type DiscoveredModel,
+	getGithubCopilotReasoningEffortConfigId,
 	isModelAllowed,
 } from "../src/llm/acp-session.js";
 import { AcpAdapter } from "../src/llm/acp.js";
@@ -18,11 +19,18 @@ import type { AdapterEvent } from "../src/llm/adapter.js";
 // discoverModels() can be exercised without real subprocesses.
 // ---------------------------------------------------------------------------
 
-const { mockSpawn, mockInitialize, mockNewSession, mockSetSessionModel } = vi.hoisted(() => ({
+const {
+	mockSpawn,
+	mockInitialize,
+	mockNewSession,
+	mockSetSessionModel,
+	mockSetSessionConfigOption,
+} = vi.hoisted(() => ({
 	mockSpawn: vi.fn(),
 	mockInitialize: vi.fn(),
 	mockNewSession: vi.fn(),
 	mockSetSessionModel: vi.fn(),
+	mockSetSessionConfigOption: vi.fn(),
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -39,6 +47,7 @@ vi.mock("@agentclientprotocol/sdk", async (importOriginal) => {
 			initialize: mockInitialize,
 			newSession: mockNewSession,
 			unstable_setSessionModel: mockSetSessionModel,
+			setSessionConfigOption: mockSetSessionConfigOption,
 		})),
 	};
 });
@@ -478,6 +487,157 @@ describe("isModelAllowed", () => {
 
 	it("allows everything when no patterns are configured", () => {
 		expect(isModelAllowed("claude-opus-4.6-fast", [])).toBe(true);
+	});
+});
+
+describe("getGithubCopilotReasoningEffortConfigId", () => {
+	it("returns the Copilot reasoning_effort config id when present", () => {
+		expect(
+			getGithubCopilotReasoningEffortConfigId({
+				configOptions: [{ id: "reasoning_effort" }],
+			}),
+		).toBe("reasoning_effort");
+	});
+
+	it("returns null when configOptions is absent", () => {
+		expect(getGithubCopilotReasoningEffortConfigId({})).toBeNull();
+	});
+
+	it("returns null for non-Copilot thought-level selectors", () => {
+		expect(
+			getGithubCopilotReasoningEffortConfigId({
+				configOptions: [{ id: "some_other_id" }],
+			}),
+		).toBeNull();
+	});
+});
+
+describe("AcpSessionManager.acquire — reasoning effort via session/set_config_option", () => {
+	beforeEach(() => {
+		mockSpawn.mockReset();
+		mockInitialize.mockReset();
+		mockNewSession.mockReset();
+		mockSetSessionModel.mockReset();
+		mockSetSessionConfigOption.mockReset();
+	});
+
+	function primeAcquire(opts: {
+		advertiseEffort?: boolean;
+		sessionId?: string;
+	} = {}) {
+		const proc = createMockProcess();
+		mockSpawn.mockReturnValueOnce(proc);
+		mockInitialize.mockResolvedValueOnce({});
+		mockNewSession.mockResolvedValueOnce({
+			sessionId: opts.sessionId ?? "sess-effort",
+			models: {},
+			configOptions: opts.advertiseEffort
+				? [
+						{ id: "mode", category: "mode" },
+						{ id: "model", category: "model" },
+						{
+							id: "reasoning_effort",
+							category: "thought_level",
+							currentValue: "medium",
+						},
+					]
+				: [{ id: "mode", category: "mode" }],
+		});
+		return proc;
+	}
+
+	const effortNoopClient: acp.Client = {
+		requestPermission: vi.fn(async () => ({ outcome: { outcome: "cancelled" as const } })),
+		sessionUpdate: vi.fn(async () => {}),
+	};
+
+	it("calls setSessionConfigOption with the configured reasoningEffort for github-copilot", async () => {
+		primeAcquire({ advertiseEffort: true });
+		mockSetSessionConfigOption.mockResolvedValueOnce({ configOptions: [] });
+
+		const manager = new AcpSessionManager();
+		await manager.acquire(
+			"task-1",
+			"github-copilot",
+			{
+				githubCopilot: { reasoningEffort: "high" },
+				mcpServers: [],
+			},
+			effortNoopClient,
+		);
+
+		expect(mockSetSessionConfigOption).toHaveBeenCalledOnce();
+		expect(mockSetSessionConfigOption).toHaveBeenCalledWith({
+			sessionId: "sess-effort",
+			configId: "reasoning_effort",
+			value: "high",
+		});
+	});
+
+	it("does NOT call setSessionConfigOption when no reasoningEffort is configured", async () => {
+		primeAcquire({ advertiseEffort: true });
+
+		const manager = new AcpSessionManager();
+		await manager.acquire(
+			"task-2",
+			"github-copilot",
+			{ githubCopilot: {}, mcpServers: [] },
+			effortNoopClient,
+		);
+
+		expect(mockSetSessionConfigOption).not.toHaveBeenCalled();
+	});
+
+	it("skips setSessionConfigOption when the agent does not advertise reasoning_effort", async () => {
+		primeAcquire({ advertiseEffort: false });
+
+		const manager = new AcpSessionManager();
+		await manager.acquire(
+			"task-3",
+			"github-copilot",
+			{
+				githubCopilot: { reasoningEffort: "high" },
+				mcpServers: [],
+			},
+			effortNoopClient,
+		);
+
+		expect(mockSetSessionConfigOption).not.toHaveBeenCalled();
+	});
+
+	it("ignores reasoningEffort for non-copilot providers", async () => {
+		primeAcquire({ advertiseEffort: true });
+
+		const manager = new AcpSessionManager();
+		await manager.acquire(
+			"task-4",
+			"claude-cli",
+			// biome-ignore lint/suspicious/noExplicitAny: exercising provider-gating
+			{ githubCopilot: { reasoningEffort: "high" } as any, mcpServers: [] },
+			effortNoopClient,
+		);
+
+		expect(mockSetSessionConfigOption).not.toHaveBeenCalled();
+	});
+
+	it("swallows errors from setSessionConfigOption (best-effort)", async () => {
+		primeAcquire({ advertiseEffort: true });
+		mockSetSessionConfigOption.mockRejectedValueOnce(new Error("Internal error"));
+
+		const manager = new AcpSessionManager();
+		await expect(
+			manager.acquire(
+				"task-5",
+				"github-copilot",
+				{
+					githubCopilot: { reasoningEffort: "high" },
+					mcpServers: [],
+				},
+				effortNoopClient,
+			),
+		).resolves.toBeDefined();
+
+		expect(manager.has("task-5")).toBe(true);
 	});
 });
 
