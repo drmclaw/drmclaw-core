@@ -34,10 +34,10 @@ describe("buildUnifiedDisplay", () => {
 	it("groups tool_call events by toolCallId into tool-call-groups", () => {
 		const entries = [
 			mkEntry(0, "runtime", "lifecycle", { phase: "start" }),
-			mkEntry(1, "acp", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_call", { tool: "ls", status: "completed", toolCallId: "tc-1" }),
-			mkEntry(3, "acp", "tool_call", { tool: "cat", status: "pending", toolCallId: "tc-2" }),
-			mkEntry(4, "acp", "tool_call", { tool: "cat", status: "completed", toolCallId: "tc-2" }),
+			mkEntry(1, "codex", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_call", { tool: "ls", status: "completed", toolCallId: "tc-1" }),
+			mkEntry(3, "codex", "tool_call", { tool: "cat", status: "pending", toolCallId: "tc-2" }),
+			mkEntry(4, "codex", "tool_call", { tool: "cat", status: "completed", toolCallId: "tc-2" }),
 			mkEntry(5, "runtime", "lifecycle", { phase: "end" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
@@ -60,13 +60,13 @@ describe("buildUnifiedDisplay", () => {
 
 	it("collapses consecutive stream events into stream-groups", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_result", { tool: "ls", result: "files", toolCallId: "tc-1" }),
-			mkEntry(3, "acp", "stream", { delta: "Hello " }),
-			mkEntry(4, "acp", "stream", { delta: "world" }),
-			mkEntry(5, "acp", "tool_call", { tool: "cat", status: "pending", toolCallId: "tc-2" }),
-			mkEntry(6, "acp", "tool_result", { tool: "cat", result: "content", toolCallId: "tc-2" }),
-			mkEntry(7, "acp", "stream", { delta: "done" }),
+			mkEntry(1, "codex", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_result", { tool: "ls", result: "files", toolCallId: "tc-1" }),
+			mkEntry(3, "codex", "stream", { delta: "Hello " }),
+			mkEntry(4, "codex", "stream", { delta: "world" }),
+			mkEntry(5, "codex", "tool_call", { tool: "cat", status: "pending", toolCallId: "tc-2" }),
+			mkEntry(6, "codex", "tool_result", { tool: "cat", result: "content", toolCallId: "tc-2" }),
+			mkEntry(7, "codex", "stream", { delta: "done" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 
@@ -85,9 +85,9 @@ describe("buildUnifiedDisplay", () => {
 
 	it("marks trailing stream group as live when streaming", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_result", { tool: "shell", result: "ok", toolCallId: "tc-1" }),
-			mkEntry(3, "acp", "stream", { delta: "partial" }),
+			mkEntry(1, "codex", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_result", { tool: "shell", result: "ok", toolCallId: "tc-1" }),
+			mkEntry(3, "codex", "stream", { delta: "partial" }),
 		];
 		const display = buildUnifiedDisplay(entries, true);
 		// tool-call-group(tc-1), stream-group(live)
@@ -98,7 +98,7 @@ describe("buildUnifiedDisplay", () => {
 	});
 
 	it("marks trailing stream group as not-live when not streaming", () => {
-		const entries = [mkEntry(1, "acp", "stream", { delta: "text" })];
+		const entries = [mkEntry(1, "codex", "stream", { delta: "text" })];
 		const display = buildUnifiedDisplay(entries, false);
 		const streamGroups = display.filter((d) => d.kind === "stream-group");
 		expect(streamGroups).toHaveLength(1);
@@ -106,29 +106,29 @@ describe("buildUnifiedDisplay", () => {
 	});
 
 	it("handles non-stream non-tool events without error", () => {
-		const entries = [mkEntry(1, "acp", "other_event")];
+		const entries = [mkEntry(1, "codex", "other_event")];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(1);
 		expect(display[0]?.kind).toBe("event");
 	});
 
-	it("interleaves runtime and acp events in a single timeline", () => {
+	it("interleaves runtime and codex events in a single timeline", () => {
 		const entries = [
 			mkEntry(0, "system", "task_init", { prompt: "hello" }),
 			mkEntry(1, "runtime", "lifecycle", { phase: "start" }),
-			mkEntry(2, "acp", "tool_call", {
+			mkEntry(2, "codex", "tool_call", {
 				tool: "read_file",
 				status: "pending",
 				toolCallId: "tc-1",
 			}),
-			mkEntry(3, "acp", "tool_result", { tool: "read_file", result: "data", toolCallId: "tc-1" }),
-			mkEntry(4, "acp", "tool_call", {
+			mkEntry(3, "codex", "tool_result", { tool: "read_file", result: "data", toolCallId: "tc-1" }),
+			mkEntry(4, "codex", "tool_call", {
 				tool: "read_file",
 				status: "completed",
 				toolCallId: "tc-1",
 			}),
-			mkEntry(5, "acp", "stream", { delta: "Here is " }),
-			mkEntry(6, "acp", "stream", { delta: "the answer" }),
+			mkEntry(5, "codex", "stream", { delta: "Here is " }),
+			mkEntry(6, "codex", "stream", { delta: "the answer" }),
 			mkEntry(7, "runtime", "lifecycle", { phase: "end" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
@@ -153,8 +153,8 @@ describe("buildUnifiedDisplay", () => {
 
 	it("groups tool_call and tool_result with same toolCallId", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_result", { tool: "ls", result: "ok", toolCallId: "tc-1" }),
+			mkEntry(1, "codex", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_result", { tool: "ls", result: "ok", toolCallId: "tc-1" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(1);
@@ -171,9 +171,9 @@ describe("buildUnifiedDisplay", () => {
 describe("buildUnifiedDisplay — thinking groups", () => {
 	it("collapses consecutive thinking events into a thinking-group", () => {
 		const entries = [
-			mkEntry(1, "acp", "thinking", { text: "Let me " }),
-			mkEntry(2, "acp", "thinking", { text: "look at " }),
-			mkEntry(3, "acp", "thinking", { text: "the tests" }),
+			mkEntry(1, "codex", "thinking", { text: "Let me " }),
+			mkEntry(2, "codex", "thinking", { text: "look at " }),
+			mkEntry(3, "codex", "thinking", { text: "the tests" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(1);
@@ -186,8 +186,8 @@ describe("buildUnifiedDisplay — thinking groups", () => {
 
 	it("marks trailing thinking group as live when streaming", () => {
 		const entries = [
-			mkEntry(1, "acp", "thinking", { text: "hmm " }),
-			mkEntry(2, "acp", "thinking", { text: "thinking..." }),
+			mkEntry(1, "codex", "thinking", { text: "hmm " }),
+			mkEntry(2, "codex", "thinking", { text: "thinking..." }),
 		];
 		const display = buildUnifiedDisplay(entries, true);
 		const tg = display[0];
@@ -196,8 +196,12 @@ describe("buildUnifiedDisplay — thinking groups", () => {
 
 	it("flushes thinking group before a tool_call", () => {
 		const entries = [
-			mkEntry(1, "acp", "thinking", { text: "I should read the file" }),
-			mkEntry(2, "acp", "tool_call", { tool: "read_file", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(1, "codex", "thinking", { text: "I should read the file" }),
+			mkEntry(2, "codex", "tool_call", {
+				tool: "read_file",
+				status: "pending",
+				toolCallId: "tc-1",
+			}),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		// thinking-group, tool-call-group(tc-1)
@@ -208,9 +212,9 @@ describe("buildUnifiedDisplay — thinking groups", () => {
 
 	it("flushes thinking group before stream events", () => {
 		const entries = [
-			mkEntry(1, "acp", "thinking", { text: "planning" }),
-			mkEntry(2, "acp", "stream", { delta: "Here is " }),
-			mkEntry(3, "acp", "stream", { delta: "the answer" }),
+			mkEntry(1, "codex", "thinking", { text: "planning" }),
+			mkEntry(2, "codex", "stream", { delta: "Here is " }),
+			mkEntry(3, "codex", "stream", { delta: "the answer" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		// thinking-group, stream-group
@@ -221,8 +225,8 @@ describe("buildUnifiedDisplay — thinking groups", () => {
 
 	it("flushes stream group before thinking events", () => {
 		const entries = [
-			mkEntry(1, "acp", "stream", { delta: "partial " }),
-			mkEntry(2, "acp", "thinking", { text: "wait, let me reconsider" }),
+			mkEntry(1, "codex", "stream", { delta: "partial " }),
+			mkEntry(2, "codex", "thinking", { text: "wait, let me reconsider" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		// stream-group, thinking-group
@@ -233,10 +237,10 @@ describe("buildUnifiedDisplay — thinking groups", () => {
 
 	it("creates separate thinking groups when interrupted by other events", () => {
 		const entries = [
-			mkEntry(1, "acp", "thinking", { text: "first thought" }),
-			mkEntry(2, "acp", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(3, "acp", "tool_result", { tool: "ls", result: "ok", toolCallId: "tc-1" }),
-			mkEntry(4, "acp", "thinking", { text: "second thought" }),
+			mkEntry(1, "codex", "thinking", { text: "first thought" }),
+			mkEntry(2, "codex", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(3, "codex", "tool_result", { tool: "ls", result: "ok", toolCallId: "tc-1" }),
+			mkEntry(4, "codex", "thinking", { text: "second thought" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		const thinkingGroups = display.filter((d) => d.kind === "thinking-group");
@@ -252,7 +256,7 @@ describe("buildUnifiedDisplay — thinking groups", () => {
 describe("buildUnifiedDisplay — plan and usage events", () => {
 	it("renders plan events as individual event items", () => {
 		const entries = [
-			mkEntry(1, "acp", "plan", {
+			mkEntry(1, "codex", "plan", {
 				entries: [
 					{ content: "Read config", priority: "high", status: "completed" },
 					{ content: "Update tests", priority: "medium", status: "pending" },
@@ -266,7 +270,7 @@ describe("buildUnifiedDisplay — plan and usage events", () => {
 	});
 
 	it("renders usage events as individual event items", () => {
-		const entries = [mkEntry(1, "acp", "usage", { used: 50000, size: 200000 })];
+		const entries = [mkEntry(1, "codex", "usage", { used: 50000, size: 200000 })];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(1);
 		expect(display[0]?.kind).toBe("event");
@@ -279,13 +283,17 @@ describe("buildUnifiedDisplay — plan and usage events", () => {
 describe("buildUnifiedDisplay — tool-call-group", () => {
 	it("groups pending → result → completed into one tool-call-group", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "read_file", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_result", {
+			mkEntry(1, "codex", "tool_call", {
+				tool: "read_file",
+				status: "pending",
+				toolCallId: "tc-1",
+			}),
+			mkEntry(2, "codex", "tool_result", {
 				tool: "read_file",
 				result: "contents",
 				toolCallId: "tc-1",
 			}),
-			mkEntry(3, "acp", "tool_call", {
+			mkEntry(3, "codex", "tool_call", {
 				tool: "read_file",
 				status: "completed",
 				toolCallId: "tc-1",
@@ -302,7 +310,7 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("marks trailing tool-call-group as live when streaming and no terminal status", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(1, "codex", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
 		];
 		const display = buildUnifiedDisplay(entries, true);
 		expect(display).toHaveLength(1);
@@ -313,8 +321,8 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("marks tool-call-group as not-live when completed even if streaming", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_call", { tool: "shell", status: "completed", toolCallId: "tc-1" }),
+			mkEntry(1, "codex", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_call", { tool: "shell", status: "completed", toolCallId: "tc-1" }),
 		];
 		const display = buildUnifiedDisplay(entries, true);
 		const g = display[0];
@@ -323,7 +331,7 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("marks trailing tool-call-group as not-live when not streaming", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(1, "codex", "tool_call", { tool: "shell", status: "pending", toolCallId: "tc-1" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		const g = display[0];
@@ -332,8 +340,8 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("keeps tool events without toolCallId as standalone events", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "legacy", status: "pending" }),
-			mkEntry(2, "acp", "tool_result", { tool: "legacy", result: "ok" }),
+			mkEntry(1, "codex", "tool_call", { tool: "legacy", status: "pending" }),
+			mkEntry(2, "codex", "tool_result", { tool: "legacy", result: "ok" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(2);
@@ -342,10 +350,10 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("creates separate groups for different toolCallIds", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_result", { tool: "ls", result: "files", toolCallId: "tc-1" }),
-			mkEntry(3, "acp", "tool_call", { tool: "cat", status: "pending", toolCallId: "tc-2" }),
-			mkEntry(4, "acp", "tool_result", { tool: "cat", result: "data", toolCallId: "tc-2" }),
+			mkEntry(1, "codex", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_result", { tool: "ls", result: "files", toolCallId: "tc-1" }),
+			mkEntry(3, "codex", "tool_call", { tool: "cat", status: "pending", toolCallId: "tc-2" }),
+			mkEntry(4, "codex", "tool_result", { tool: "cat", result: "data", toolCallId: "tc-2" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(2);
@@ -357,10 +365,10 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("emits tool-call-group before stream events", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_result", { tool: "ls", result: "ok", toolCallId: "tc-1" }),
-			mkEntry(3, "acp", "tool_call", { tool: "ls", status: "completed", toolCallId: "tc-1" }),
-			mkEntry(4, "acp", "stream", { delta: "Here are the files" }),
+			mkEntry(1, "codex", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_result", { tool: "ls", result: "ok", toolCallId: "tc-1" }),
+			mkEntry(3, "codex", "tool_call", { tool: "ls", status: "completed", toolCallId: "tc-1" }),
+			mkEntry(4, "codex", "stream", { delta: "Here are the files" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(2);
@@ -370,7 +378,7 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("emits tool-call-group before lifecycle events", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(1, "codex", "tool_call", { tool: "ls", status: "pending", toolCallId: "tc-1" }),
 			mkEntry(2, "runtime", "lifecycle", { phase: "end" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
@@ -381,9 +389,9 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 
 	it("handles mixed toolCallId and no-toolCallId tool events", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", { tool: "new_tool", status: "pending", toolCallId: "tc-1" }),
-			mkEntry(2, "acp", "tool_result", { tool: "new_tool", result: "ok", toolCallId: "tc-1" }),
-			mkEntry(3, "acp", "tool_call", { tool: "legacy", status: "pending" }),
+			mkEntry(1, "codex", "tool_call", { tool: "new_tool", status: "pending", toolCallId: "tc-1" }),
+			mkEntry(2, "codex", "tool_result", { tool: "new_tool", result: "ok", toolCallId: "tc-1" }),
+			mkEntry(3, "codex", "tool_call", { tool: "legacy", status: "pending" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
 		expect(display).toHaveLength(2);
@@ -392,25 +400,25 @@ describe("buildUnifiedDisplay — tool-call-group", () => {
 	});
 });
 
-// ── Interleaved tool events (real ACP patterns) ──────────────────────
+// ── Interleaved tool events (real Codex patterns) ──────────────────────
 
 describe("buildUnifiedDisplay — interleaved tool events", () => {
 	it("groups tool events split by thinking chunks", () => {
-		// Real ACP pattern: thinking arrives between pending and result
+		// Real Codex pattern: thinking arrives between pending and result
 		const entries = [
-			mkEntry(1, "acp", "tool_call", {
+			mkEntry(1, "codex", "tool_call", {
 				tool: "read_file",
 				status: "pending",
 				toolCallId: "tc-1",
 			}),
-			mkEntry(2, "acp", "thinking", { text: "Reading the file..." }),
-			mkEntry(3, "acp", "thinking", { text: "This looks like config" }),
-			mkEntry(4, "acp", "tool_result", {
+			mkEntry(2, "codex", "thinking", { text: "Reading the file..." }),
+			mkEntry(3, "codex", "thinking", { text: "This looks like config" }),
+			mkEntry(4, "codex", "tool_result", {
 				tool: "read_file",
 				result: "file contents",
 				toolCallId: "tc-1",
 			}),
-			mkEntry(5, "acp", "tool_call", {
+			mkEntry(5, "codex", "tool_call", {
 				tool: "read_file",
 				status: "completed",
 				toolCallId: "tc-1",
@@ -435,49 +443,49 @@ describe("buildUnifiedDisplay — interleaved tool events", () => {
 	});
 
 	it("groups parallel tool calls with interleaved events", () => {
-		// Real ACP pattern: multiple tools dispatched, results interleave
+		// Real Codex pattern: multiple tools dispatched, results interleave
 		const entries = [
-			mkEntry(1, "acp", "tool_call", {
+			mkEntry(1, "codex", "tool_call", {
 				tool: "read_file",
 				status: "pending",
 				toolCallId: "tc-A",
 			}),
-			mkEntry(2, "acp", "tool_call", {
+			mkEntry(2, "codex", "tool_call", {
 				tool: "list_dir",
 				status: "pending",
 				toolCallId: "tc-B",
 			}),
-			mkEntry(3, "acp", "tool_call", {
+			mkEntry(3, "codex", "tool_call", {
 				tool: "grep",
 				status: "pending",
 				toolCallId: "tc-C",
 			}),
-			mkEntry(4, "acp", "tool_result", {
+			mkEntry(4, "codex", "tool_result", {
 				tool: "list_dir",
 				result: "files",
 				toolCallId: "tc-B",
 			}),
-			mkEntry(5, "acp", "tool_call", {
+			mkEntry(5, "codex", "tool_call", {
 				tool: "list_dir",
 				status: "completed",
 				toolCallId: "tc-B",
 			}),
-			mkEntry(6, "acp", "tool_result", {
+			mkEntry(6, "codex", "tool_result", {
 				tool: "read_file",
 				result: "content",
 				toolCallId: "tc-A",
 			}),
-			mkEntry(7, "acp", "tool_call", {
+			mkEntry(7, "codex", "tool_call", {
 				tool: "read_file",
 				status: "completed",
 				toolCallId: "tc-A",
 			}),
-			mkEntry(8, "acp", "tool_result", {
+			mkEntry(8, "codex", "tool_result", {
 				tool: "grep",
 				result: "matches",
 				toolCallId: "tc-C",
 			}),
-			mkEntry(9, "acp", "tool_call", {
+			mkEntry(9, "codex", "tool_call", {
 				tool: "grep",
 				status: "completed",
 				toolCallId: "tc-C",
@@ -502,76 +510,76 @@ describe("buildUnifiedDisplay — interleaved tool events", () => {
 		expect(display[2]?.kind === "tool-call-group" && display[2].entries).toHaveLength(3);
 	});
 
-	it("reproduces real ACP trace: thinking + parallel tools + stream", () => {
+	it("reproduces real Codex trace: thinking + parallel tools + stream", () => {
 		// Sequence matching the screenshot pattern
 		const entries = [
 			mkEntry(0, "system", "task_init", { prompt: "analyze workspace" }),
 			mkEntry(1, "runtime", "lifecycle", { phase: "start" }),
 			mkEntry(2, "runtime", "lifecycle", { phase: "prompt_sent" }),
-			mkEntry(3, "acp", "thinking", { text: "Let me look at the workspace" }),
+			mkEntry(3, "codex", "thinking", { text: "Let me look at the workspace" }),
 			// First tool: skill use
-			mkEntry(4, "acp", "tool_result", {
+			mkEntry(4, "codex", "tool_result", {
 				tool: "use_skill",
 				result: { message: "Skill not found" },
 				toolCallId: "tc-skill",
 			}),
-			mkEntry(5, "acp", "tool_call", {
+			mkEntry(5, "codex", "tool_call", {
 				tool: "use_skill",
 				status: "pending",
 				kind: "other",
 				toolCallId: "tc-skill",
 			}),
 			// Thinking interrupts
-			mkEntry(6, "acp", "thinking", { text: "I'll read the files directly" }),
+			mkEntry(6, "codex", "thinking", { text: "I'll read the files directly" }),
 			// Parallel reads dispatched
-			mkEntry(7, "acp", "tool_call", {
+			mkEntry(7, "codex", "tool_call", {
 				tool: "read_file",
 				status: "pending",
 				kind: "read",
 				toolCallId: "tc-read-skill",
 			}),
-			mkEntry(8, "acp", "thinking", { text: "checking" }),
-			mkEntry(9, "acp", "tool_call", {
+			mkEntry(8, "codex", "thinking", { text: "checking" }),
+			mkEntry(9, "codex", "tool_call", {
 				tool: "read_file",
 				status: "completed",
 				kind: "read",
 				toolCallId: "tc-read-skill",
 			}),
-			mkEntry(10, "acp", "tool_call", {
+			mkEntry(10, "codex", "tool_call", {
 				tool: "read_file",
 				status: "pending",
 				kind: "read",
 				toolCallId: "tc-read-pkg",
 			}),
-			mkEntry(11, "acp", "tool_call", {
+			mkEntry(11, "codex", "tool_call", {
 				tool: "read_file",
 				status: "pending",
 				kind: "read",
 				toolCallId: "tc-read-readme",
 			}),
-			mkEntry(12, "acp", "tool_call", {
+			mkEntry(12, "codex", "tool_call", {
 				tool: "read_file",
 				status: "completed",
 				kind: "read",
 				toolCallId: "tc-read-readme",
 			}),
-			mkEntry(13, "acp", "tool_result", {
+			mkEntry(13, "codex", "tool_result", {
 				tool: "read_file",
 				result: "readme content",
 				toolCallId: "tc-read-readme",
 			}),
-			mkEntry(14, "acp", "tool_call", {
+			mkEntry(14, "codex", "tool_call", {
 				tool: "execute",
 				status: "completed",
 				kind: "execute",
 				toolCallId: "tc-git",
 			}),
-			mkEntry(15, "acp", "tool_result", {
+			mkEntry(15, "codex", "tool_result", {
 				tool: "execute",
 				result: "commit log",
 				toolCallId: "tc-git",
 			}),
-			mkEntry(16, "acp", "stream", { delta: "Here is my analysis" }),
+			mkEntry(16, "codex", "stream", { delta: "Here is my analysis" }),
 			mkEntry(17, "runtime", "lifecycle", { phase: "end" }),
 		];
 		const display = buildUnifiedDisplay(entries, false);
@@ -614,17 +622,17 @@ describe("buildUnifiedDisplay — interleaved tool events", () => {
 
 	it("marks only incomplete tool groups as live during streaming", () => {
 		const entries = [
-			mkEntry(1, "acp", "tool_call", {
+			mkEntry(1, "codex", "tool_call", {
 				tool: "done_tool",
 				status: "pending",
 				toolCallId: "tc-done",
 			}),
-			mkEntry(2, "acp", "tool_call", {
+			mkEntry(2, "codex", "tool_call", {
 				tool: "running_tool",
 				status: "pending",
 				toolCallId: "tc-running",
 			}),
-			mkEntry(3, "acp", "tool_call", {
+			mkEntry(3, "codex", "tool_call", {
 				tool: "done_tool",
 				status: "completed",
 				toolCallId: "tc-done",

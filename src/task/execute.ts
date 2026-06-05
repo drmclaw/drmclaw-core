@@ -10,17 +10,16 @@
  *    config.skills.dirs), then merges request-level `skillDirs` additively
  *    with deduplication, optionally filtered by a skill allowlist.
  * 3. **Runtime chain** — composes `createLLMAdapter` → `createAgentRuntime`
- *    → `TaskRunner`, routing through the configured ACP CLI.
+ *    → `TaskRunner`, routing through the configured Codex CLI.
  * 4. **Execution** — sends the prompt through the agent runtime,
- *    collecting lifecycle and ACP events in memory.
- * 5. **Cleanup** — disposes ACP adapter resources after one-off execution.
+ *    collecting lifecycle and Codex events in memory.
+ * 5. **Cleanup** — disposes Codex adapter resources after one-off execution.
  * 6. **Result** — returns a structured {@link ExecuteTaskResult} with
  *    the agent's output, task ID, provider/model metadata, and collected
  *    events.
  *
- * Events are collected in-memory only — no durable {@link EventStore}
- * is wired in this path. The server/CLI bootstrap attaches
- * `JsonlEventStore` separately for long-running processes.
+ * Events are returned in-memory and, when `executionHistory.enabled`
+ * is true, also persisted under `dataDir/runs/<taskId>/`.
  */
 
 import type { z } from "zod";
@@ -33,6 +32,7 @@ import {
 	formatSkillResolutionErrors,
 	resolveSkillsForRequest,
 } from "../skills/resolve.js";
+import { persistExecutionHistory } from "./history.js";
 import { runPromptViaRuntime } from "./runtime-chain.js";
 
 /**
@@ -40,7 +40,7 @@ import { runPromptViaRuntime } from "./runtime-chain.js";
  *
  * The product declares *what* it wants the LLM agent to do and
  * *how tightly* to constrain it. Core handles skill loading,
- * runtime composition, and ACP lifecycle.
+ * runtime composition, and Codex lifecycle.
  */
 export interface ExecuteTaskRequest {
 	/** The prompt to send to the configured LLM agent. */
@@ -123,7 +123,7 @@ export interface ExecuteTaskResult {
 	 * `executeTask`. Products that need durable persistence should forward
 	 * these events to their own store.
 	 *
-	 * Includes `source: "acp"` entries as proof the real LLM adapter ran.
+	 * Includes `source: "codex"` entries as proof the real LLM adapter ran.
 	 */
 	events: PersistedRuntimeEvent[];
 
@@ -133,11 +133,14 @@ export interface ExecuteTaskResult {
 	/** Model that was requested via config override or loaded config. */
 	requestedModel?: string;
 
+	/** Codex reasoning effort that was requested via config override or loaded config. */
+	requestedReasoningEffort?: string;
+
 	/**
 	 * Structured skill-resolution errors when an explicitly skill-scoped
 	 * request could not be satisfied. Populated only on fail-closed
 	 * errors raised before runtime assembly — a `status: "error"` result
-	 * with this field set means the ACP runtime never started.
+	 * with this field set means the Codex runtime never started.
 	 */
 	skillResolutionErrors?: SkillResolutionError[];
 }
@@ -154,7 +157,7 @@ export interface ExecuteTaskResult {
  * those directories are merged additively with deduplication —
  * they do not replace config-driven skills.
  *
- * Timeout triggers real ACP adapter disposal so the subprocess is
+ * Timeout triggers real Codex adapter disposal so the subprocess is
  * torn down rather than just racing the promise.  The returned
  * `events` array is a snapshot; late events from abandoned runs
  * are discarded.
@@ -210,6 +213,7 @@ export async function executeTask(
 				events: [],
 				provider: config.llm.provider,
 				requestedModel: config.llm.model,
+				requestedReasoningEffort: config.llm.reasoningEffort,
 				skillResolutionErrors: resolution.errors,
 			};
 		}
@@ -226,11 +230,31 @@ export async function executeTask(
 			startTime,
 		});
 
-		return {
+		const result = {
 			...runResult,
 			provider: config.llm.provider,
 			requestedModel: config.llm.model,
+			requestedReasoningEffort: config.llm.reasoningEffort,
 		};
+
+		await persistExecutionHistory({
+			config,
+			taskId: result.taskId,
+			kind: "task",
+			status: result.status,
+			provider: result.provider,
+			requestedModel: result.requestedModel,
+			requestedReasoningEffort: result.requestedReasoningEffort,
+			workingDir: request.workingDir,
+			startedAt: new Date(startTime).toISOString(),
+			finishedAt: new Date().toISOString(),
+			durationMs: result.durationMs,
+			output: result.output,
+			error: result.error,
+			events: result.events,
+		});
+
+		return result;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		return {
@@ -242,6 +266,7 @@ export async function executeTask(
 			events: [],
 			provider: config?.llm.provider ?? "",
 			requestedModel: config?.llm.model,
+			requestedReasoningEffort: config?.llm.reasoningEffort,
 		};
 	}
 }

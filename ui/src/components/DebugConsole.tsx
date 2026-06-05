@@ -73,15 +73,18 @@ export function DebugConsole({
 	// Accepts an AbortSignal so callers can cancel stale fetches.
 	const replayTask = useCallback(async (taskId: string, signal?: AbortSignal) => {
 		try {
-			const res = await fetch(`/api/tasks/${taskId}/events`, { signal });
+			const res = await fetch(`/api/runs/${taskId}`, { signal });
 			if (!res.ok) return;
-			const events = (await res.json()) as Array<{
-				taskId: string;
-				sequence: number;
-				timestamp: string;
-				source: string;
-				event: Record<string, unknown>;
-			}>;
+			const detail = (await res.json()) as {
+				events: Array<{
+					taskId: string;
+					sequence: number;
+					timestamp: string;
+					source: string;
+					event: Record<string, unknown>;
+				}>;
+			};
+			const events = Array.isArray(detail.events) ? detail.events : [];
 
 			// Guard: if the signal was aborted between the fetch and here,
 			// a newer replay has started — discard this result.
@@ -136,6 +139,7 @@ export function DebugConsole({
 		replayAbortRef.current = ac;
 		(async () => {
 			let tasks: Array<{ id: string; prompt: string }> = [];
+			let newestFirst = false;
 			try {
 				const res = await fetch("/api/tasks", { signal: ac.signal });
 				if (res.ok) tasks = (await res.json()) as Array<{ id: string; prompt: string }>;
@@ -143,18 +147,25 @@ export function DebugConsole({
 				/* ignore */
 			}
 
-			// Fallback to persisted task list (survives backend restarts)
+			// Fallback to persisted run list (survives backend restarts)
 			if (tasks.length === 0) {
 				try {
-					const res = await fetch("/api/events/tasks", { signal: ac.signal });
-					if (res.ok) tasks = (await res.json()) as Array<{ id: string; prompt: string }>;
+					const res = await fetch("/api/runs", { signal: ac.signal });
+					if (res.ok) {
+						const runs = (await res.json()) as Array<{ taskId: string; promptPreview?: string }>;
+						tasks = runs.map((run) => ({
+							id: run.taskId,
+							prompt: run.promptPreview ?? "",
+						}));
+						newestFirst = true;
+					}
 				} catch {
 					/* ignore */
 				}
 			}
 
 			if (tasks.length === 0 || ac.signal.aborted) return;
-			const last = tasks[tasks.length - 1];
+			const last = newestFirst ? tasks[0] : tasks[tasks.length - 1];
 			if (last) {
 				setTaskId(last.id);
 				setChatMessages([{ role: "user", content: last.prompt }]);
@@ -452,7 +463,7 @@ function StreamGroup({ group }: { group: UnifiedDisplayItem & { kind: "stream-gr
 			>
 				<span className="text-gray-600 shrink-0">{expanded ? "▼" : "▶"}</span>
 				<span className="text-gray-600 shrink-0">{time}</span>
-				<SourceBadge source={firstEntry?.source ?? "acp"} />
+				<SourceBadge source={firstEntry?.source ?? "codex"} />
 				<span className="text-gray-400 font-semibold shrink-0">LLM RESPONSE</span>
 				<span className="text-gray-600">
 					{group.entries.length} chunks &middot; {group.totalChars.toLocaleString()} chars
@@ -502,7 +513,7 @@ function ThinkingGroup({ group }: { group: UnifiedDisplayItem & { kind: "thinkin
 			>
 				<span className="text-gray-600 shrink-0">{expanded ? "▼" : "▶"}</span>
 				<span className="text-gray-600 shrink-0">{time}</span>
-				<SourceBadge source={firstEntry?.source ?? "acp"} />
+				<SourceBadge source={firstEntry?.source ?? "codex"} />
 				<span className="text-amber-400 font-semibold shrink-0">THINKING</span>
 				<span className="text-gray-600">
 					{group.entries.length} chunks &middot; {group.totalChars.toLocaleString()} chars
@@ -564,7 +575,7 @@ function ToolCallGroup({ group }: { group: UnifiedDisplayItem & { kind: "tool-ca
 			>
 				<span className="text-gray-600 shrink-0">{expanded ? "▼" : "▶"}</span>
 				<span className="text-gray-600 shrink-0">{time}</span>
-				<SourceBadge source={firstEntry?.source ?? "acp"} />
+				<SourceBadge source={firstEntry?.source ?? "codex"} />
 				<ToolStatusBadge status={finalStatus} />
 				<span className="text-blue-400 font-semibold shrink-0">TOOL</span>
 				<span className="text-gray-400 shrink-0">
@@ -615,7 +626,7 @@ function extractToolDetail(args: unknown): string {
 function SourceBadge({ source }: { source: string }) {
 	const styles: Record<string, string> = {
 		runtime: "bg-cyan-900/40 text-cyan-400",
-		acp: "bg-purple-900/40 text-purple-400",
+		codex: "bg-purple-900/40 text-purple-400",
 		system: "bg-gray-700/40 text-gray-400",
 	};
 	const cls = styles[source] ?? styles.system;

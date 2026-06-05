@@ -6,8 +6,8 @@
  *
  * 1. Compose `createLLMAdapter` → `createAgentRuntime` → `TaskRunner`.
  * 2. Run the prompt through the agent runtime, collecting lifecycle and
- *    ACP events in memory.
- * 3. Enforce the optional timeout with real ACP adapter disposal (not
+ *    Codex events in memory.
+ * 3. Enforce the optional timeout with real Codex adapter disposal (not
  *    just a promise race).
  * 4. Gate late events from abandoned runs.
  * 5. Dispose the adapter in a `finally` block.
@@ -96,7 +96,7 @@ export async function runPromptViaRuntime(
 				timer = setTimeout(() => {
 					// Stop accepting late events before disposal
 					accepting = false;
-					// Trigger real ACP teardown so the subprocess is killed.
+					// Trigger real Codex teardown so the subprocess is killed.
 					// Fire-and-forget: the adapter is cleaned up, but we don't
 					// block the timeout rejection on it.
 					if (adapter) {

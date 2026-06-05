@@ -129,27 +129,27 @@ describe("TaskRunner", () => {
 				const emit = (e: RuntimeEvent) => options.onEvent?.(e);
 				emit({ source: "runtime", type: "lifecycle", phase: "start" });
 				emit({ source: "runtime", type: "lifecycle", phase: "prompt_sent" });
-				emit({ source: "acp", type: "stream", delta: "hello" });
-				emit({ source: "acp", type: "thinking", text: "considering..." });
+				emit({ source: "codex", type: "stream", delta: "hello" });
+				emit({ source: "codex", type: "thinking", text: "considering..." });
 				emit({
-					source: "acp",
+					source: "codex",
 					type: "tool_call",
 					tool: "read_file",
 					status: "pending",
 				});
 				emit({
-					source: "acp",
+					source: "codex",
 					type: "tool_result",
 					tool: "read_file",
 					result: "content",
 				});
 				emit({
-					source: "acp",
+					source: "codex",
 					type: "plan",
 					entries: [{ content: "Step 1", priority: "high", status: "pending" }],
 				});
 				emit({
-					source: "acp",
+					source: "codex",
 					type: "usage",
 					used: 5000,
 					size: 100000,
@@ -175,11 +175,11 @@ describe("TaskRunner", () => {
 		// Verify the outer source is correctly propagated from RuntimeEvent.source
 		const byType = (t: string) => persisted.filter((e) => e.event.type === t);
 		for (const e of byType("lifecycle")) expect(e.source).toBe("runtime");
-		for (const e of byType("stream")) expect(e.source).toBe("acp");
-		for (const e of byType("tool_call")) expect(e.source).toBe("acp");
-		for (const e of byType("tool_result")) expect(e.source).toBe("acp");
-		for (const e of byType("thinking")) expect(e.source).toBe("acp");
-		for (const e of byType("plan")) expect(e.source).toBe("acp");
-		for (const e of byType("usage")) expect(e.source).toBe("acp");
+		for (const e of byType("stream")) expect(e.source).toBe("codex");
+		for (const e of byType("tool_call")) expect(e.source).toBe("codex");
+		for (const e of byType("tool_result")) expect(e.source).toBe("codex");
+		for (const e of byType("thinking")) expect(e.source).toBe("codex");
+		for (const e of byType("plan")) expect(e.source).toBe("codex");
+		for (const e of byType("usage")) expect(e.source).toBe("codex");
 	});
 });

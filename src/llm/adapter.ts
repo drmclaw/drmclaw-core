@@ -41,7 +41,7 @@ export interface LLMAdapterRunOptions {
 	onEvent?: (event: AdapterEvent) => void;
 	/** Tool-call approval callback — if set, overrides permissionMode. */
 	onToolCall?: (tool: string, args: unknown) => Promise<"approved" | "denied">;
-	/** ACP session ID to resume (if the session manager provides one). */
+	/** Codex session ID to resume (if the session manager provides one). */
 	sessionId?: string;
 }
 

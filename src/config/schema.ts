@@ -8,124 +8,47 @@ export const retryPolicySchema = z.object({
 });
 export type RetryPolicy = z.infer<typeof retryPolicySchema>;
 
-/**
- * Provider IDs — the single user-facing configuration axis.
- *
- * CLI providers launch an ACP-compatible CLI binary; the ACP transport
- * is an internal detail.  Embedded providers talk to the upstream API
- * directly and drmclaw owns the tool-calling loop.
- */
-export const cliProviderIds = ["github-copilot", "claude-cli", "openai-cli", "gemini-cli"] as const;
-export type CliProvider = (typeof cliProviderIds)[number];
-
-export const embeddedProviderIds = ["claude", "openai", "gemini"] as const;
-export type EmbeddedProvider = (typeof embeddedProviderIds)[number];
-
-export const llmProviderSchema = z.enum([...cliProviderIds, ...embeddedProviderIds]);
+/** Codex App Server is the only supported LLM runtime for this MVP. */
+export const llmProviderSchema = z.literal("codex-app-server");
 export type LLMProvider = z.infer<typeof llmProviderSchema>;
 
-/** Returns true when the provider routes through an ACP CLI binary. */
-export function isCliProvider(provider: LLMProvider): provider is CliProvider {
-	return (cliProviderIds as readonly string[]).includes(provider);
-}
+export const codexApprovalPolicySchema = z.enum(["untrusted", "on-failure", "on-request", "never"]);
+export type CodexApprovalPolicy = z.infer<typeof codexApprovalPolicySchema>;
 
-/**
- * Reasoning effort level supported by GitHub Copilot CLI for GPT-5.4 ACP sessions.
- *
- * Applied per-session via the ACP `session/set_config_option` method
- * (configId = "reasoning_effort") after the session is created.
- *
- * NOTE: Copilot CLI's `--effort` / `--reasoning-effort` global flag is
- * silently ignored in `--acp` mode (as of Copilot CLI 1.0.35) — the flag
- * only affects one-shot `copilot -p` invocations. Setting effort for an
- * ACP session MUST go through the protocol-level config option.
- *
- * This schema is intentionally scoped to the values currently advertised by
- * GitHub Copilot CLI for GPT-5.4: `low`, `medium`, and `high`. Other ACP
- * agents or future models may expose a different option ID or different
- * values and should be handled separately.
- */
-export const reasoningEffortSchema = z.enum(["low", "medium", "high"]);
-export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+export const codexSandboxModeSchema = z.enum([
+	"read-only",
+	"workspace-write",
+	"danger-full-access",
+]);
+export type CodexSandboxMode = z.infer<typeof codexSandboxModeSchema>;
 
-/** GitHub Copilot-specific ACP settings. */
-export const githubCopilotConfigSchema = z
+export const codexReasoningEffortSchema = z.enum([
+	"none",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+]);
+export type CodexReasoningEffort = z.infer<typeof codexReasoningEffortSchema>;
+
+/** Codex App Server subprocess configuration. */
+export const codexAppServerConfigSchema = z
 	.object({
-		defaultModel: z.string().optional(),
-		/**
-		 * Reasoning effort applied to each new session via the ACP
-		 * `session/set_config_option` method. Omit to use the agent's
-		 * default (currently `medium` for GitHub Copilot CLI GPT-5.4).
-		 */
-		reasoningEffort: reasoningEffortSchema.optional(),
+		command: z.string().default("codex"),
+		args: z.array(z.string()).default(["app-server"]),
+		approvalPolicy: codexApprovalPolicySchema.default("never"),
+		sandbox: codexSandboxModeSchema.default("danger-full-access"),
 	})
 	.default({});
+export type CodexAppServerConfig = z.infer<typeof codexAppServerConfigSchema>;
 
-/** Per-provider ACP config (transport-layer settings for the ACP CLI). */
-export const acpConfigSchema = z
-	.object({
-		command: z.string().optional(),
-		args: z.array(z.string()).optional(),
-		githubCopilot: githubCopilotConfigSchema.default({}),
-		mcpServers: z
-			.array(
-				z.object({
-					name: z.string(),
-					command: z.string(),
-					args: z.array(z.string()).default([]),
-					env: z.record(z.string()).default({}),
-				}),
-			)
-			.default([]),
-	})
-	.default({});
-export type AcpConfig = z.infer<typeof acpConfigSchema>;
-
-/**
- * Resolve a fully expanded command + args for spawning the ACP CLI.
- *
- * Provider defaults:
- *   - github-copilot: `copilot --acp --stdio [--model <defaultModel>]`
- *   - claude-cli:     `claude --acp --stdio`
- *   - openai-cli:     `openai --acp --stdio`
- *   - gemini-cli:     `gemini --acp --stdio`
- *
- * Explicit `command` / `args` always override provider defaults.
- */
-const CLI_DEFAULT_COMMANDS: Record<CliProvider, string> = {
-	"github-copilot": "copilot",
-	"claude-cli": "claude",
-	"openai-cli": "openai",
-	"gemini-cli": "gemini",
-};
-
-const DEFAULT_ACP_ARGS = ["--acp", "--stdio"];
-
-export function resolveAcpCommandArgs(
-	provider: CliProvider,
-	acpCfg: AcpConfig,
-	modelOverride?: string,
-): { command: string; args: string[] } {
-	const command = acpCfg.command ?? CLI_DEFAULT_COMMANDS[provider];
-	const baseArgs = acpCfg.args ?? DEFAULT_ACP_ARGS;
-
-	// Resolve model: explicit override > githubCopilot.defaultModel
-	const model =
-		modelOverride ??
-		(provider === "github-copilot" ? acpCfg.githubCopilot.defaultModel : undefined);
-
-	const args = [...baseArgs];
-
-	if (model && !args.includes("--model")) {
-		args.push("--model", model);
-	}
-
-	// NOTE: Reasoning effort is intentionally NOT forwarded as a CLI flag.
-	// Copilot CLI's `--effort` is silently ignored in `--acp` mode; the
-	// effort must be applied per-session via `session/set_config_option`
-	// after the session is created (see AcpSessionManager.acquire).
-
-	return { command, args };
+/** Resolve the command used to spawn Codex App Server over stdio. */
+export function resolveCodexAppServerCommandArgs(codexCfg: CodexAppServerConfig): {
+	command: string;
+	args: string[];
+} {
+	return { command: codexCfg.command, args: [...codexCfg.args] };
 }
 
 /** Full application config schema. */
@@ -147,9 +70,10 @@ export const configSchema = z.object({
 
 	llm: z
 		.object({
-			provider: llmProviderSchema.default("github-copilot"),
+			provider: llmProviderSchema.default("codex-app-server"),
 			model: z.string().optional(),
-			acp: acpConfigSchema.default({}),
+			reasoningEffort: codexReasoningEffortSchema.optional(),
+			codex: codexAppServerConfigSchema.default({}),
 			apiKey: z.string().optional(),
 			permissionMode: z.enum(["approve-all", "approve-reads", "deny-all"]).default("approve-all"),
 			retry: retryPolicySchema.default({}),
@@ -167,6 +91,12 @@ export const configSchema = z.object({
 		.default({}),
 
 	dataDir: z.string().default(".drmclaw"),
+
+	executionHistory: z
+		.object({
+			enabled: z.boolean().default(true),
+		})
+		.default({}),
 
 	scheduler: z
 		.object({

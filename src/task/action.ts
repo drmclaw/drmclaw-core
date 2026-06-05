@@ -48,6 +48,7 @@ import type { PersistedRuntimeEvent } from "../events/types.js";
 import type { RuntimeEvent } from "../runtime/types.js";
 import { type SkillResolutionError, resolveSkillsForRequest } from "../skills/resolve.js";
 import type { SkillAction, SkillEntry } from "../skills/types.js";
+import { persistExecutionHistory } from "./history.js";
 import { runPromptViaRuntime } from "./runtime-chain.js";
 
 /**
@@ -108,6 +109,7 @@ export interface ExecuteSkillActionResult {
 	events: PersistedRuntimeEvent[];
 	provider: string;
 	requestedModel?: string;
+	requestedReasoningEffort?: string;
 
 	/** Structured validation errors (any pre-runtime validation failure). */
 	validationErrors?: ActionValidationError[];
@@ -237,6 +239,7 @@ export async function executeSkillAction(
 				events: [],
 				provider: config.llm.provider,
 				requestedModel: config.llm.model,
+				requestedReasoningEffort: config.llm.reasoningEffort,
 				validationErrors,
 				skillResolutionErrors: resolution.errors,
 			};
@@ -263,6 +266,7 @@ export async function executeSkillAction(
 				events: [],
 				provider: config.llm.provider,
 				requestedModel: config.llm.model,
+				requestedReasoningEffort: config.llm.reasoningEffort,
 				validationErrors: [err],
 				skillResolutionErrors: [
 					{
@@ -298,6 +302,7 @@ export async function executeSkillAction(
 				events: [],
 				provider: config.llm.provider,
 				requestedModel: config.llm.model,
+				requestedReasoningEffort: config.llm.reasoningEffort,
 				validationErrors: [err],
 			};
 		}
@@ -319,6 +324,7 @@ export async function executeSkillAction(
 				events: [],
 				provider: config.llm.provider,
 				requestedModel: config.llm.model,
+				requestedReasoningEffort: config.llm.reasoningEffort,
 				validationErrors: [err],
 				actionValidationErrors: [err],
 			};
@@ -363,6 +369,7 @@ export async function executeSkillAction(
 				events: [],
 				provider: config.llm.provider,
 				requestedModel: config.llm.model,
+				requestedReasoningEffort: config.llm.reasoningEffort,
 				validationErrors: inputErrors,
 				actionValidationErrors: inputErrors,
 			};
@@ -389,16 +396,39 @@ export async function executeSkillAction(
 			startTime,
 		});
 
-		return {
+		const result = {
 			...runResult,
 			provider: config.llm.provider,
 			requestedModel: config.llm.model,
+			requestedReasoningEffort: config.llm.reasoningEffort,
 			resolvedAction: {
 				skill: request.skill,
 				action: request.action,
 				inputs: resolvedInputs,
 			},
 		};
+
+		await persistExecutionHistory({
+			config,
+			taskId: result.taskId,
+			kind: "skill-action",
+			status: result.status,
+			provider: result.provider,
+			requestedModel: result.requestedModel,
+			requestedReasoningEffort: result.requestedReasoningEffort,
+			workingDir: request.workingDir,
+			skill: request.skill,
+			action: request.action,
+			inputs: resolvedInputs,
+			startedAt: new Date(startTime).toISOString(),
+			finishedAt: new Date().toISOString(),
+			durationMs: result.durationMs,
+			output: result.output,
+			error: result.error,
+			events: result.events,
+		});
+
+		return result;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		return {
@@ -410,6 +440,7 @@ export async function executeSkillAction(
 			events: [],
 			provider: config?.llm.provider ?? "",
 			requestedModel: config?.llm.model,
+			requestedReasoningEffort: config?.llm.reasoningEffort,
 		};
 	}
 }

@@ -11,7 +11,7 @@
 export interface EventLogEntry {
 	sequence: number;
 	timestamp: string;
-	source: "runtime" | "acp" | "system";
+	source: "runtime" | "codex" | "system";
 	event: {
 		type: string;
 		phase?: string;

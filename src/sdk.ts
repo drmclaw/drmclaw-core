@@ -25,13 +25,11 @@ export type { AdapterEvent, LLMAdapter, LLMAdapterRunOptions } from "./llm/adapt
 
 // Runtime types
 export type {
-	AcpExecutionPolicy,
-	AcpRuntimeOptions,
 	AgentRuntime,
 	AgentRuntimeOptions,
+	CodexExecutionPolicy,
+	CodexRuntimeOptions,
 	CommonExecutionPolicy,
-	DirectExecutionPolicy,
-	DirectRuntimeOptions,
 	ExecutionPolicy,
 	PlainExecutionPolicy,
 	RuntimeEvent,
@@ -51,7 +49,12 @@ export type {
 export type { CronJob } from "./scheduler/types.js";
 
 // Config types
-export type { CliProvider, DrMClawConfig, EmbeddedProvider, LLMProvider } from "./config/schema.js";
+export type {
+	CodexAppServerConfig,
+	CodexReasoningEffort,
+	DrMClawConfig,
+	LLMProvider,
+} from "./config/schema.js";
 export { defineConfig } from "./config/schema.js";
 
 // Task execution surfaces
@@ -65,3 +68,21 @@ export type {
 } from "./task/action.js";
 export { buildExecuteSkillActionRequest } from "./task/request.js";
 export type { SkillActionCallSpec } from "./task/request.js";
+
+// Execution history
+export {
+	buildExecutionTimeline,
+	buildExecutionTranscript,
+	listExecutionRuns,
+	readExecutionRun,
+	summarizeExecutionEvents,
+} from "./events/store.js";
+export type {
+	ExecutionEventSummary,
+	ExecutionRunMetadata,
+	ExecutionRunRecord,
+	ExecutionTimelineItem,
+	ExecutionTimelineItemKind,
+	ExecutionTranscriptMessage,
+	PersistedRuntimeEvent,
+} from "./events/types.js";

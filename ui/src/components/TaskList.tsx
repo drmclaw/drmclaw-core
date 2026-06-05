@@ -13,10 +13,12 @@ interface InMemoryTask {
 	completedAt: number;
 }
 
-interface PersistedTask {
-	id: string;
-	prompt: string;
+interface PersistedRun {
+	taskId: string;
+	promptPreview?: string;
 	startedAt: string;
+	status: string;
+	durationMs: number;
 }
 
 interface MergedTask {
@@ -38,7 +40,7 @@ export function TaskList({ onSelectTask }: TaskListProps) {
 	useEffect(() => {
 		(async () => {
 			let inMemory: InMemoryTask[] = [];
-			let persisted: PersistedTask[] = [];
+			let persisted: PersistedRun[] = [];
 
 			try {
 				const res = await fetch("/api/tasks");
@@ -48,8 +50,8 @@ export function TaskList({ onSelectTask }: TaskListProps) {
 			}
 
 			try {
-				const res = await fetch("/api/events/tasks");
-				if (res.ok) persisted = (await res.json()) as PersistedTask[];
+				const res = await fetch("/api/runs");
+				if (res.ok) persisted = (await res.json()) as PersistedRun[];
 			} catch {
 				/* ignore */
 			}
@@ -57,10 +59,12 @@ export function TaskList({ onSelectTask }: TaskListProps) {
 			// Merge: prefer in-memory (has result details), supplement with persisted
 			const byId = new Map<string, MergedTask>();
 			for (const t of persisted) {
-				byId.set(t.id, {
-					id: t.id,
-					prompt: t.prompt,
+				byId.set(t.taskId, {
+					id: t.taskId,
+					prompt: t.promptPreview ?? "",
 					startedAt: t.startedAt,
+					status: t.status,
+					durationMs: t.durationMs,
 				});
 			}
 			for (const t of inMemory) {

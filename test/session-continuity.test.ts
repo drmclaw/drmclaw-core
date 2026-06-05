@@ -4,7 +4,7 @@ import { WebConnector } from "../src/connectors/web.js";
 import type { LLMAdapterRunOptions } from "../src/llm/adapter.js";
 import { TaskRunner } from "../src/runner/runner.js";
 import type { TaskResult } from "../src/runner/types.js";
-import { AcpRuntime } from "../src/runtime/agent.js";
+import { CodexRuntime } from "../src/runtime/agent.js";
 import type { AgentRuntimeOptions } from "../src/runtime/types.js";
 
 // ---------------------------------------------------------------------------
@@ -56,10 +56,10 @@ describe("Session continuity — connector → runner → runtime → adapter", 
 		expect(received[0].sessionId).toBeUndefined();
 	});
 
-	it("sessionId flows from runner through AcpRuntime to adapter", async () => {
+	it("sessionId flows from runner through CodexRuntime to adapter", async () => {
 		const config = makeConfig();
 		const { adapter, calls } = makeSpyAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const runner = new TaskRunner(config, runtime, []);
 
 		await runner.run("test prompt", { sessionId: "ws-client-99" });
@@ -71,7 +71,7 @@ describe("Session continuity — connector → runner → runtime → adapter", 
 	it("each runner.run() call preserves caller-supplied sessionId", async () => {
 		const config = makeConfig();
 		const { adapter, calls } = makeSpyAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const runner = new TaskRunner(config, runtime, []);
 
 		// Simulate two messages from the same WebSocket client
@@ -89,7 +89,7 @@ describe("Session continuity — connector → runner → runtime → adapter", 
 	it("adapter receives no sessionId when runner has none", async () => {
 		const config = makeConfig();
 		const { adapter, calls } = makeSpyAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const runner = new TaskRunner(config, runtime, []);
 
 		await runner.run("one-off");
@@ -101,7 +101,7 @@ describe("Session continuity — connector → runner → runtime → adapter", 
 	it("end-to-end: connector → runner → adapter wiring", async () => {
 		const config = makeConfig();
 		const { adapter, calls } = makeSpyAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const runner = new TaskRunner(config, runtime, []);
 		const connector = new WebConnector();
 

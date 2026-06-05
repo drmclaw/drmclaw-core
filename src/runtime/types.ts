@@ -2,8 +2,7 @@ import type { TaskResult } from "../runner/types.js";
 import type { SkillEntry } from "../skills/types.js";
 
 /**
- * Cross-backend policy controls — fields that are semantically valid
- * for both ACP and direct-provider runtimes.
+ * Cross-runtime policy controls.
  */
 export interface CommonExecutionPolicy {
 	/** Permission mode override for this run. */
@@ -16,47 +15,26 @@ export interface CommonExecutionPolicy {
 	commandAllowlist?: string[];
 }
 
-/**
- * A plain common policy with no backend-specific fields.
- *
- * Uses `never` markers so that a `DirectExecutionPolicy` or
- * `AcpExecutionPolicy` variable cannot be structurally assigned to this
- * type — closing the "variable path" loophole where excess-property
- * checks would otherwise not fire.
- */
+/** A plain common policy with no backend-specific fields. */
 export type PlainExecutionPolicy = CommonExecutionPolicy & {
 	backend?: never;
 	maxSteps?: never;
 };
 
-/**
- * ACP-mode policy — the upstream CLI owns the tool-calling loop.
- * drmclaw enforces tool allowlists via `evaluatePermission`, but does
- * not own loop-level bounds like `maxSteps`.
- */
-export interface AcpExecutionPolicy extends CommonExecutionPolicy {
-	backend: "acp";
-}
-
-/**
- * Direct-provider policy — drmclaw owns the tool-calling loop
- * (Vercel AI SDK `generateText` with `maxSteps`).
- */
-export interface DirectExecutionPolicy extends CommonExecutionPolicy {
-	backend: "direct";
-	/** Maximum tool-calling rounds (default: 10). */
-	maxSteps?: number;
+/** Codex App Server policy — Codex owns the tool-calling loop. */
+export interface CodexExecutionPolicy extends CommonExecutionPolicy {
+	backend: "codex";
 }
 
 /** Discriminated union of backend-specific execution policies. */
-export type ExecutionPolicy = AcpExecutionPolicy | DirectExecutionPolicy;
+export type ExecutionPolicy = CodexExecutionPolicy;
 
 /** Lifecycle phases emitted during an agent run. */
 export type LifecyclePhase = "start" | "prompt_sent" | "end" | "error";
 
 /** Origin tag carried by every RuntimeEvent so downstream consumers
  *  (runner, event store, UI) never need to re-derive source from type. */
-export type RuntimeEventSource = "runtime" | "acp";
+export type RuntimeEventSource = "runtime" | "codex";
 
 /** Events emitted during an AgentRuntime run. */
 export type RuntimeEvent = { source: RuntimeEventSource } & (
@@ -103,36 +81,24 @@ interface BaseRuntimeOptions {
 	onEvent?: (event: RuntimeEvent) => void;
 }
 
-/** Runtime options for the ACP backend. */
-export interface AcpRuntimeOptions extends BaseRuntimeOptions {
-	backend: "acp";
-	/** ACP-mode execution policy (no `maxSteps`). */
-	policy?: AcpExecutionPolicy | PlainExecutionPolicy;
-}
-
-/** Runtime options for the direct-provider backend (future). */
-export interface DirectRuntimeOptions extends BaseRuntimeOptions {
-	backend: "direct";
-	/** Direct-provider execution policy (includes `maxSteps`). */
-	policy?: DirectExecutionPolicy | PlainExecutionPolicy;
+/** Runtime options for the Codex App Server backend. */
+export interface CodexRuntimeOptions extends BaseRuntimeOptions {
+	backend: "codex";
+	policy?: CodexExecutionPolicy | PlainExecutionPolicy;
 }
 
 /**
  * Discriminated union of backend-specific runtime options.
  *
- * Discriminated on `backend`: consumers can narrow with
- * `if (options.backend === "acp")` to access the correct policy type.
+ * Discriminated on `backend`; currently Codex App Server is the only backend.
  */
-export type AgentRuntimeOptions = AcpRuntimeOptions | DirectRuntimeOptions;
+export type AgentRuntimeOptions = CodexRuntimeOptions;
 
 /**
  * AgentRuntime — bounded multi-step execution with skills, tools, and policies.
  *
- * In ACP mode: ACP-compatible CLIs own the tool-calling loop; drmclaw injects skills
- * via system prompt and enforces policies via tool allowlists.
- *
- * In direct-provider mode: drmclaw owns the tool-calling loop using Vercel AI SDK
- * `generateText` with `maxSteps` and drmclaw-defined tools.
+ * Codex App Server owns the tool-calling loop; drmclaw injects skills via
+ * system prompt and maps Codex events into the shared runtime event vocabulary.
  */
 export interface AgentRuntime {
 	run(options: AgentRuntimeOptions): Promise<TaskResult>;

@@ -37,25 +37,107 @@ export type EventPayload =
  *
  * `source` identifies event origin in the unified Events timeline:
  *   - "runtime"  → drmclaw-core orchestration (lifecycle events)
- *   - "acp"      → LLM provider actions (tool calls, results, stream)
+ *   - "codex"    → Codex App Server actions (tool calls, results, stream)
  *   - "system"   → system-level notices (task init)
  */
 export interface PersistedRuntimeEvent {
 	taskId: string;
 	sequence: number;
 	timestamp: string;
-	source: "runtime" | "acp" | "system";
+	source: "runtime" | "codex" | "system";
 	event: EventPayload;
 }
 
+export type ExecutionRunKind = "task" | "skill-action";
+
+export interface ExecutionToolSummary {
+	name: string;
+	callsStarted: number;
+	callsCompleted: number;
+	successCount: number;
+	failureCount: number;
+}
+
+export interface ExecutionEventSummary {
+	eventCounts: Record<string, number>;
+	toolActivity: {
+		totalCalls: number;
+		uniqueTools: number;
+		tools: ExecutionToolSummary[];
+	};
+}
+
+export interface ExecutionTranscriptMessage {
+	role: "user" | "assistant";
+	timestamp: string | null;
+	content: string;
+}
+
+export type ExecutionTimelineItemKind =
+	| "prompt"
+	| "lifecycle"
+	| "progress"
+	| "thinking"
+	| "plan"
+	| "tool_call"
+	| "tool_result"
+	| "usage";
+
+export interface ExecutionTimelineItem {
+	id: string;
+	kind: ExecutionTimelineItemKind;
+	timestamp: string | null;
+	title: string;
+	content?: string;
+	preview?: string;
+	status?: string;
+	tool?: string;
+	toolCallId?: string;
+	toolKind?: string;
+	args?: unknown;
+	result?: unknown;
+	sequenceStart: number;
+	sequenceEnd: number;
+}
+
+export interface ExecutionRunMetadata {
+	taskId: string;
+	kind: ExecutionRunKind;
+	status: "completed" | "error";
+	provider: string;
+	requestedModel?: string;
+	requestedReasoningEffort?: string;
+	workingDir?: string;
+	skill?: string;
+	action?: string;
+	inputs?: Record<string, unknown>;
+	startedAt: string;
+	finishedAt: string;
+	durationMs: number;
+	outputPreview?: string;
+	errorPreview?: string;
+	promptPreview?: string;
+	eventCounts: Record<string, number>;
+}
+
+export interface ExecutionRunRecord {
+	metadata: ExecutionRunMetadata;
+	events: PersistedRuntimeEvent[];
+	transcript: ExecutionTranscriptMessage[];
+	timeline: ExecutionTimelineItem[];
+	summary: ExecutionEventSummary;
+}
+
 /**
- * EventStore — append-only per-task event log.
+ * ExecutionHistoryStore — durable Codex run history.
  *
- * MVP interface: append events and replay them for a given task.
+ * Storage is append-oriented while a run is active and finalized by writing
+ * metadata after completion.
  */
-export interface EventStore {
+export interface ExecutionHistoryStore {
 	append(taskId: string, event: PersistedRuntimeEvent): Promise<void>;
-	listTaskEvents(taskId: string): Promise<PersistedRuntimeEvent[]>;
-	/** List all persisted tasks (id + prompt extracted from the task_init event). */
-	listTasks(): Promise<Array<{ id: string; prompt: string; startedAt: string }>>;
+	saveMetadata(metadata: ExecutionRunMetadata): Promise<void>;
+	listRuns(options?: { limit?: number }): Promise<ExecutionRunMetadata[]>;
+	readRun(taskId: string): Promise<ExecutionRunRecord | null>;
+	listRunEvents(taskId: string): Promise<PersistedRuntimeEvent[]>;
 }

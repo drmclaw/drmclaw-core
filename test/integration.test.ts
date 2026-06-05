@@ -9,7 +9,7 @@ import { WebConnector } from "../src/connectors/web.js";
 import type { LLMAdapter, LLMAdapterRunOptions } from "../src/llm/adapter.js";
 import { TaskRunner } from "../src/runner/runner.js";
 import type { TaskResult } from "../src/runner/types.js";
-import { AcpRuntime } from "../src/runtime/agent.js";
+import { CodexRuntime } from "../src/runtime/agent.js";
 import { CronService } from "../src/scheduler/service.js";
 import { createApp } from "../src/server/app.js";
 import type { SkillEntry } from "../src/skills/types.js";
@@ -40,7 +40,7 @@ beforeAll(() => {
 	// so the OS assigns a free port — avoids CI collisions.
 	const config = configSchema.parse({});
 	const adapter = makeMockAdapter();
-	const runtime = new AcpRuntime(config, adapter);
+	const runtime = new CodexRuntime(config, adapter);
 	const skills = [
 		{
 			name: "test-skill",
@@ -221,7 +221,7 @@ describe("GET /api/ready — with isReady callback", () => {
 	beforeAll(() => {
 		const config = configSchema.parse({});
 		const adapter = makeMockAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const skills: SkillEntry[] = [];
 		const readyRunner = new TaskRunner(config, runtime, skills);
 		const scheduler = new CronService(

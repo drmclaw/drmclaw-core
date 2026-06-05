@@ -1,11 +1,15 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configSchema } from "../src/config/schema.js";
+import { readExecutionRun } from "../src/events/store.js";
 import type { TaskResult } from "../src/runner/types.js";
 import type { AgentRuntime, AgentRuntimeOptions, RuntimeEvent } from "../src/runtime/types.js";
 import type { SkillAction, SkillActionInput, SkillEntry } from "../src/skills/types.js";
 
 // ---------------------------------------------------------------------------
-// Mock the runtime chain layer so no real ACP CLI is needed — same pattern
+// Mock the runtime chain layer so no real Codex CLI is needed — same pattern
 // as execute-task.test.ts. We care about structured validation behavior
 // BEFORE runtime assembly and that the runtime is/isn't called appropriately.
 // ---------------------------------------------------------------------------
@@ -82,7 +86,7 @@ function simulateSuccessfulRun(output = "Done."): void {
 	mockRuntimeRun.mockImplementation(async (options) => {
 		const emit = (e: RuntimeEvent) => options.onEvent?.(e);
 		emit({ source: "runtime", type: "lifecycle", phase: "start" });
-		emit({ source: "acp", type: "stream", delta: output });
+		emit({ source: "codex", type: "stream", delta: output });
 		const result: TaskResult = { status: "completed", output, durationMs: 5 };
 		emit({ source: "runtime", type: "lifecycle", phase: "end", result });
 		return result;
@@ -97,6 +101,12 @@ describe("executeSkillAction", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockLoadConfig.mockImplementation(async (overrides?: Record<string, unknown>) => {
+			if (!overrides || !("dataDir" in overrides)) {
+				return configSchema.parse({
+					...(overrides ?? {}),
+					executionHistory: { enabled: false },
+				});
+			}
 			return configSchema.parse(overrides ?? {});
 		});
 		mockLoadSkills.mockResolvedValue([]);
@@ -117,26 +127,41 @@ describe("executeSkillAction", () => {
 		mockLoadSkills.mockResolvedValue([jira]);
 		simulateSuccessfulRun("ticket created");
 
-		const result = await executeSkillAction({
-			skill: "jira",
-			action: "create_ticket",
-			inputs: { summary: "fix bug", description: "repro steps" },
-		});
+		const dataDir = await mkdtemp(join(tmpdir(), "drmclaw-skill-history-"));
+		try {
+			const result = await executeSkillAction({
+				skill: "jira",
+				action: "create_ticket",
+				inputs: { summary: "fix bug", description: "repro steps" },
+				config: { dataDir },
+			});
 
-		expect(result.status).toBe("completed");
-		expect(result.output).toBe("ticket created");
-		expect(result.resolvedAction).toEqual({
-			skill: "jira",
-			action: "create_ticket",
-			inputs: { summary: "fix bug", description: "repro steps" },
-		});
-		expect(result.validationErrors).toBeUndefined();
-		expect(mockRuntimeRun).toHaveBeenCalledTimes(1);
-		const prompt = mockRuntimeRun.mock.calls[0][0].prompt;
-		expect(prompt).toContain("jira.create_ticket");
-		expect(prompt).toContain("summary");
-		expect(prompt).toContain("fix bug");
-		expect(prompt).toContain("Create a new ticket");
+			expect(result.status).toBe("completed");
+			expect(result.output).toBe("ticket created");
+			expect(result.resolvedAction).toEqual({
+				skill: "jira",
+				action: "create_ticket",
+				inputs: { summary: "fix bug", description: "repro steps" },
+			});
+			expect(result.validationErrors).toBeUndefined();
+			expect(mockRuntimeRun).toHaveBeenCalledTimes(1);
+			const prompt = mockRuntimeRun.mock.calls[0][0].prompt;
+			expect(prompt).toContain("jira.create_ticket");
+			expect(prompt).toContain("summary");
+			expect(prompt).toContain("fix bug");
+			expect(prompt).toContain("Create a new ticket");
+			const run = await readExecutionRun(result.taskId, { dataDir });
+			expect(run?.metadata).toMatchObject({
+				taskId: result.taskId,
+				kind: "skill-action",
+				skill: "jira",
+				action: "create_ticket",
+				provider: "codex-app-server",
+				inputs: { summary: "fix bug", description: "repro steps" },
+			});
+		} finally {
+			await rm(dataDir, { recursive: true, force: true });
+		}
 	});
 
 	it("SKILL_NOT_FOUND — target skill not discovered, runtime not called", async () => {

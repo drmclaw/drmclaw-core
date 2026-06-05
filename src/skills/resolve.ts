@@ -14,7 +14,7 @@
  * root cannot override a config-declared skill of the same name; readiness
  * is checked against the merged copy.
  * Violations are returned as structured {@link SkillResolutionError}s so
- * the runtime surface (e.g. `executeTask`) can fail closed before any ACP
+ * the runtime surface (e.g. `executeTask`) can fail closed before any Codex
  * subprocess is spawned.
  *
  * A single request returns errors of **exactly one class**, chosen by the

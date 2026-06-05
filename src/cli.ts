@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { loadDrMClawConfig } from "./config/loader.js";
-import { isCliProvider, resolveAcpCommandArgs } from "./config/schema.js";
+import { resolveCodexAppServerCommandArgs } from "./config/schema.js";
 import { createDefaultRegistry } from "./connectors/registry.js";
-import { JsonlEventStore } from "./events/store.js";
+import { createExecutionHistoryStore } from "./events/store.js";
 import { createLLMAdapter } from "./llm/index.js";
 import { TaskRunner } from "./runner/runner.js";
 import { createAgentRuntime } from "./runtime/agent.js";
@@ -24,16 +24,12 @@ async function main() {
 
 	// 1. Load and validate config
 	const config = await loadDrMClawConfig();
-	const providerKind = isCliProvider(config.llm.provider) ? "cli" : "embedded";
-	console.log(`[drmclaw] Config loaded (provider: ${config.llm.provider}, ${providerKind})`);
-	if (isCliProvider(config.llm.provider)) {
-		const { command, args } = resolveAcpCommandArgs(
-			config.llm.provider,
-			config.llm.acp,
-			config.llm.model,
-		);
-		console.log(`[drmclaw] ACP: ${command} ${args.join(" ")}`);
-	}
+	const { command, args } = resolveCodexAppServerCommandArgs(config.llm.codex);
+	console.log(`[drmclaw] Config loaded (provider: ${config.llm.provider})`);
+	console.log(
+		`[drmclaw] Model: ${config.llm.model ?? "(Codex default)"}, reasoning: ${config.llm.reasoningEffort ?? "(Codex default)"}`,
+	);
+	console.log(`[drmclaw] Codex App Server: ${command} ${args.join(" ")}`);
 
 	// 2. Discover and load skills
 	const skills = await loadSkills(config);
@@ -46,10 +42,12 @@ async function main() {
 	// 4. Create task runner
 	const runner = new TaskRunner(config, runtime, skills);
 
-	// 5. Create event store for durable event persistence
-	const eventStore = new JsonlEventStore(config.dataDir);
-	runner.setEventStore(eventStore);
-	console.log(`[drmclaw] Event store enabled (${config.dataDir}/events/tasks/)`);
+	// 5. Create execution history store for durable run persistence
+	if (config.executionHistory.enabled) {
+		const executionHistoryStore = createExecutionHistoryStore(config.dataDir);
+		runner.setExecutionHistoryStore(executionHistoryStore);
+		console.log(`[drmclaw] Execution history enabled (${config.dataDir}/runs/)`);
+	}
 
 	// 6. Create scheduler
 	const scheduler = new CronService(join(config.dataDir, "jobs.json"));

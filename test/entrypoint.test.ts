@@ -48,7 +48,11 @@ describe("source barrel: index.ts", () => {
 	it("exports infrastructure services", async () => {
 		const mod = await import("../src/index.js");
 		expect(typeof mod.CronService).toBe("function");
-		expect(typeof mod.JsonlEventStore).toBe("function");
+		expect(typeof mod.ExecutionHistoryJsonlStore).toBe("function");
+		expect(typeof mod.listExecutionRuns).toBe("function");
+		expect(typeof mod.readExecutionRun).toBe("function");
+		expect(typeof mod.buildExecutionTimeline).toBe("function");
+		expect(typeof mod.buildExecutionTranscript).toBe("function");
 		expect(typeof mod.FileDeliveryQueue).toBe("function");
 	});
 
@@ -111,6 +115,14 @@ describe("source barrel: sdk.ts", () => {
 		expect(typeof mod.defineConfig).toBe("function");
 	});
 
+	it("exports execution history helpers", async () => {
+		const mod = await import("../src/sdk.js");
+		expect(typeof mod.listExecutionRuns).toBe("function");
+		expect(typeof mod.readExecutionRun).toBe("function");
+		expect(typeof mod.buildExecutionTimeline).toBe("function");
+		expect(typeof mod.buildExecutionTranscript).toBe("function");
+	});
+
 	it("re-exports skill action types (type-level)", () => {
 		// Types erase at runtime; compilation is the assertion.
 		type _Entry = import("../src/sdk.js").SkillEntry;
@@ -157,7 +169,7 @@ const distExists =
 
 describe.runIf(distExists)('built package export "." (dist/index.js)', () => {
 	it("is side-effect-free and exports core symbols", async () => {
-		const mod = await import("../dist/index.js");
+		const mod = (await import("../dist/index.js")) as Record<string, unknown>;
 		expect(mod).toBeDefined();
 		expect(typeof mod.loadDrMClawConfig).toBe("function");
 		expect(typeof mod.loadSkills).toBe("function");
@@ -167,14 +179,16 @@ describe.runIf(distExists)('built package export "." (dist/index.js)', () => {
 		expect(typeof mod.executeTask).toBe("function");
 		expect(typeof mod.createApp).toBe("function");
 		expect(typeof mod.CronService).toBe("function");
-		expect(typeof mod.JsonlEventStore).toBe("function");
+		expect(typeof mod.ExecutionHistoryJsonlStore).toBe("function");
+		expect(typeof mod.listExecutionRuns).toBe("function");
+		expect(typeof mod.readExecutionRun).toBe("function");
 		expect(typeof mod.FileDeliveryQueue).toBe("function");
 		expect(typeof mod.WebConnector).toBe("function");
 		expect(typeof mod.PACKAGE_ROOT).toBe("string");
 	});
 
 	it("does NOT export removed internal symbols", async () => {
-		const mod = await import("../dist/index.js");
+		const mod = (await import("../dist/index.js")) as Record<string, unknown>;
 		const keys = Object.keys(mod);
 		expect(keys).not.toContain("createLLMAdapter");
 		expect(keys).not.toContain("AcpSessionManager");
@@ -184,11 +198,13 @@ describe.runIf(distExists)('built package export "." (dist/index.js)', () => {
 
 describe.runIf(distExists)('built package export "./sdk" (dist/sdk.js)', () => {
 	it("is side-effect-free and exports SDK symbols", async () => {
-		const mod = await import("../dist/sdk.js");
+		const mod = (await import("../dist/sdk.js")) as Record<string, unknown>;
 		expect(mod).toBeDefined();
 		expect(typeof mod.findMissingRequires).toBe("function");
 		expect(typeof mod.FileDeliveryQueue).toBe("function");
 		expect(typeof mod.defineConfig).toBe("function");
+		expect(typeof mod.listExecutionRuns).toBe("function");
+		expect(typeof mod.readExecutionRun).toBe("function");
 	});
 });
 

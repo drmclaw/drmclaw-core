@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { DrMClawConfig } from "../config/schema.js";
-import { isModelAllowed } from "../llm/acp-session.js";
 import type { LLMAdapter } from "../llm/adapter.js";
+import { isModelAllowed } from "../llm/model-policy.js";
 import type { TaskRunner } from "../runner/runner.js";
 import type { CronService } from "../scheduler/service.js";
 import type { SkillEntry } from "../skills/types.js";
@@ -41,18 +41,25 @@ export function createRoutes(
 		return c.json(task);
 	});
 
-	api.get("/tasks/:id/events", async (c) => {
-		const store = runner.getEventStore();
-		if (!store) return c.json({ error: "Event store not available" }, 501);
-		const events = await store.listTaskEvents(c.req.param("id"));
-		return c.json(events);
+	api.get("/runs", async (c) => {
+		const store = runner.getExecutionHistoryStore();
+		if (!store) return c.json([]);
+		return c.json(await store.listRuns());
 	});
 
-	// Persisted task list (survives backend restarts)
-	api.get("/events/tasks", async (c) => {
-		const store = runner.getEventStore();
-		if (!store) return c.json([]);
-		return c.json(await store.listTasks());
+	api.get("/runs/:id", async (c) => {
+		const store = runner.getExecutionHistoryStore();
+		if (!store) return c.json({ error: "Execution history not available" }, 501);
+		try {
+			const run = await store.readRun(c.req.param("id"));
+			if (!run) return c.json({ error: "Run not found" }, 404);
+			return c.json(run);
+		} catch (error) {
+			if (error instanceof Error && error.message === "invalid task id") {
+				return c.json({ error: "invalid task id" }, 400);
+			}
+			throw error;
+		}
 	});
 
 	// ---- Skills ----

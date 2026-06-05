@@ -7,7 +7,7 @@ import type { SkillEntry } from "./types.js";
  * its SKILL.md.  The LLM is instructed to use its built-in read tool to
  * load the skill's instructions on demand — no custom MCP server needed.
  *
- * The ACP CLI agent (Copilot, Claude, etc.)
+ * The Codex CLI agent (Copilot, Claude, etc.)
  * already has file-reading tools, so the LLM just reads
  * SKILL.md when a skill applies.
  */

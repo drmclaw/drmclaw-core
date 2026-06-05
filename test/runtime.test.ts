@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { configSchema } from "../src/config/schema.js";
 import type { AdapterEvent, LLMAdapter, LLMAdapterRunOptions } from "../src/llm/adapter.js";
-import { AcpRuntime, createAgentRuntime } from "../src/runtime/agent.js";
+import { CodexRuntime, createAgentRuntime } from "../src/runtime/agent.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
 import type { SkillEntry } from "../src/skills/types.js";
 
@@ -33,14 +33,14 @@ function makeMockAdapter(): LLMAdapter {
 	};
 }
 
-describe("AcpRuntime", () => {
+describe("CodexRuntime", () => {
 	it("forwards systemContext to the adapter", async () => {
 		const config = makeConfig();
 		const adapter = makeMockAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "hello",
 			systemContext: "<safety>be safe</safety>",
 			skills: [],
@@ -54,10 +54,10 @@ describe("AcpRuntime", () => {
 	it("uses empty systemContext when not provided", async () => {
 		const config = makeConfig();
 		const adapter = makeMockAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 		});
@@ -69,11 +69,11 @@ describe("AcpRuntime", () => {
 	it("emits lifecycle events", async () => {
 		const config = makeConfig();
 		const adapter = makeMockAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const events: RuntimeEvent[] = [];
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "hello",
 			skills: [],
 			onEvent: (e) => events.push(e),
@@ -95,11 +95,11 @@ describe("AcpRuntime", () => {
 			}),
 			dispose: vi.fn(async () => {}),
 		};
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const events: RuntimeEvent[] = [];
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			onEvent: (e) => events.push(e),
@@ -107,8 +107,8 @@ describe("AcpRuntime", () => {
 
 		const streamEvents = events.filter((e) => e.type === "stream");
 		expect(streamEvents).toEqual([
-			{ source: "acp", type: "stream", delta: "hello " },
-			{ source: "acp", type: "stream", delta: "world" },
+			{ source: "codex", type: "stream", delta: "hello " },
+			{ source: "codex", type: "stream", delta: "world" },
 		]);
 	});
 
@@ -133,11 +133,11 @@ describe("AcpRuntime", () => {
 			}),
 			dispose: vi.fn(async () => {}),
 		};
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const events: RuntimeEvent[] = [];
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			onEvent: (e) => events.push(e),
@@ -146,7 +146,7 @@ describe("AcpRuntime", () => {
 		const toolEvents = events.filter((e) => e.type === "tool_call" || e.type === "tool_result");
 		expect(toolEvents).toEqual([
 			{
-				source: "acp",
+				source: "codex",
 				type: "tool_call",
 				tool: "shell(git)",
 				status: "running",
@@ -154,7 +154,7 @@ describe("AcpRuntime", () => {
 				toolCallId: "tc-42",
 			},
 			{
-				source: "acp",
+				source: "codex",
 				type: "tool_result",
 				tool: "shell(git)",
 				result: "clean",
@@ -177,11 +177,11 @@ describe("AcpRuntime", () => {
 			}),
 			dispose: vi.fn(async () => {}),
 		};
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const events: RuntimeEvent[] = [];
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			onEvent: (e) => events.push(e),
@@ -189,7 +189,7 @@ describe("AcpRuntime", () => {
 
 		const toolCall = events.find((e) => e.type === "tool_call");
 		expect(toolCall).toEqual({
-			source: "acp",
+			source: "codex",
 			type: "tool_call",
 			tool: "read_file",
 			status: "pending",
@@ -207,18 +207,18 @@ describe("AcpRuntime", () => {
 			}),
 			dispose: vi.fn(async () => {}),
 		};
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const events: RuntimeEvent[] = [];
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			onEvent: (e) => events.push(e),
 		});
 
 		const thinking = events.find((e) => e.type === "thinking");
-		expect(thinking).toEqual({ source: "acp", type: "thinking", text: "Let me consider..." });
+		expect(thinking).toEqual({ source: "codex", type: "thinking", text: "Let me consider..." });
 	});
 
 	it("maps adapter plan events to runtime plan events", async () => {
@@ -236,11 +236,11 @@ describe("AcpRuntime", () => {
 			}),
 			dispose: vi.fn(async () => {}),
 		};
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const events: RuntimeEvent[] = [];
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			onEvent: (e) => events.push(e),
@@ -248,7 +248,7 @@ describe("AcpRuntime", () => {
 
 		const plan = events.find((e) => e.type === "plan");
 		expect(plan).toEqual({
-			source: "acp",
+			source: "codex",
 			type: "plan",
 			entries: [
 				{ content: "Read config", priority: "high", status: "completed" },
@@ -271,11 +271,11 @@ describe("AcpRuntime", () => {
 			}),
 			dispose: vi.fn(async () => {}),
 		};
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 		const events: RuntimeEvent[] = [];
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			onEvent: (e) => events.push(e),
@@ -283,7 +283,7 @@ describe("AcpRuntime", () => {
 
 		const usage = events.find((e) => e.type === "usage");
 		expect(usage).toEqual({
-			source: "acp",
+			source: "codex",
 			type: "usage",
 			used: 50000,
 			size: 200000,
@@ -294,10 +294,10 @@ describe("AcpRuntime", () => {
 	it("uses policy permissionMode over config defaults", async () => {
 		const config = makeConfig({ llm: { permissionMode: "deny-all" } });
 		const adapter = makeMockAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			policy: { permissionMode: "approve-all" },
@@ -310,10 +310,10 @@ describe("AcpRuntime", () => {
 	it("passes sessionId through to adapter", async () => {
 		const config = makeConfig();
 		const adapter = makeMockAdapter();
-		const runtime = new AcpRuntime(config, adapter);
+		const runtime = new CodexRuntime(config, adapter);
 
 		await runtime.run({
-			backend: "acp",
+			backend: "codex",
 			prompt: "test",
 			skills: [],
 			sessionId: "sess-123",
@@ -325,26 +325,11 @@ describe("AcpRuntime", () => {
 });
 
 describe("createAgentRuntime", () => {
-	it("creates AcpRuntime for CLI providers", () => {
-		const config = makeConfig({ llm: { provider: "github-copilot" } });
+	it("creates CodexRuntime", () => {
+		const config = makeConfig();
 		const adapter = makeMockAdapter();
 		const runtime = createAgentRuntime(config, adapter);
 
-		expect(runtime).toBeInstanceOf(AcpRuntime);
-	});
-
-	it("creates AcpRuntime for any CLI provider", () => {
-		const config = makeConfig({ llm: { provider: "claude-cli" } });
-		const adapter = makeMockAdapter();
-		const runtime = createAgentRuntime(config, adapter);
-
-		expect(runtime).toBeInstanceOf(AcpRuntime);
-	});
-
-	it("throws for embedded providers (not yet implemented)", () => {
-		const config = makeConfig({ llm: { provider: "openai" } });
-		const adapter = makeMockAdapter();
-
-		expect(() => createAgentRuntime(config, adapter)).toThrow(/not yet implemented/);
+		expect(runtime).toBeInstanceOf(CodexRuntime);
 	});
 });

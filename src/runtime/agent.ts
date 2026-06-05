@@ -1,23 +1,22 @@
-import { isCliProvider } from "../config/schema.js";
 import type { DrMClawConfig } from "../config/schema.js";
 import type { AdapterEvent, LLMAdapter } from "../llm/adapter.js";
 import type { TaskResult } from "../runner/types.js";
 import type {
-	AcpRuntimeOptions,
 	AgentRuntime,
 	AgentRuntimeOptions,
+	CodexRuntimeOptions,
 	RuntimeEvent,
 } from "./types.js";
 
 /** Map an adapter-level event to the runtime event vocabulary.
- *  All adapter events originate from the LLM provider → source: "acp". */
+ *  All adapter events originate from Codex App Server → source: "codex". */
 function mapAdapterEvent(event: AdapterEvent): RuntimeEvent {
 	switch (event.type) {
 		case "text":
-			return { source: "acp", type: "stream", delta: event.text };
+			return { source: "codex", type: "stream", delta: event.text };
 		case "tool_call":
 			return {
-				source: "acp",
+				source: "codex",
 				type: "tool_call",
 				tool: event.tool,
 				status: event.status,
@@ -27,19 +26,19 @@ function mapAdapterEvent(event: AdapterEvent): RuntimeEvent {
 			};
 		case "tool_result":
 			return {
-				source: "acp",
+				source: "codex",
 				type: "tool_result",
 				tool: event.tool,
 				result: event.result,
 				toolCallId: event.toolCallId,
 			};
 		case "thinking":
-			return { source: "acp", type: "thinking", text: event.text };
+			return { source: "codex", type: "thinking", text: event.text };
 		case "plan":
-			return { source: "acp", type: "plan", entries: event.entries };
+			return { source: "codex", type: "plan", entries: event.entries };
 		case "usage":
 			return {
-				source: "acp",
+				source: "codex",
 				type: "usage",
 				used: event.used,
 				size: event.size,
@@ -49,18 +48,18 @@ function mapAdapterEvent(event: AdapterEvent): RuntimeEvent {
 }
 
 /**
- * ACP runtime — delegates the tool-calling loop to an ACP server.
+ * Codex runtime — delegates the tool-calling loop to Codex App Server.
  *
  * drmclaw injects skills into the system prompt and enforces policies
- * via the LLMAdapter's tool allowlist.
+ * through Codex approval/sandbox settings.
  */
-export class AcpRuntime implements AgentRuntime {
+export class CodexRuntime implements AgentRuntime {
 	constructor(
 		private readonly config: DrMClawConfig,
 		private readonly adapter: LLMAdapter,
 	) {}
 
-	async run(options: AcpRuntimeOptions): Promise<TaskResult> {
+	async run(options: CodexRuntimeOptions): Promise<TaskResult> {
 		const emit = (event: RuntimeEvent) => options.onEvent?.(event);
 
 		emit({ source: "runtime", type: "lifecycle", phase: "start" });
@@ -101,17 +100,7 @@ export class AcpRuntime implements AgentRuntime {
 
 /**
  * Create the appropriate AgentRuntime based on config.
- *
- * CLI providers route to AcpRuntime; embedded providers will route to
- * a direct-provider runtime (future).
  */
 export function createAgentRuntime(config: DrMClawConfig, adapter: LLMAdapter): AgentRuntime {
-	if (isCliProvider(config.llm.provider)) {
-		return new AcpRuntime(config, adapter);
-	}
-
-	// Future: DirectProviderRuntime using Vercel AI SDK Core with maxSteps
-	throw new Error(
-		`Embedded provider "${config.llm.provider}" is not yet implemented. Use a CLI provider (github-copilot, claude-cli, openai-cli, gemini-cli).`,
-	);
+	return new CodexRuntime(config, adapter);
 }

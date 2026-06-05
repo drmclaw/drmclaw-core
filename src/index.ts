@@ -8,16 +8,17 @@
 // Config
 export { loadDrMClawConfig, resolveConfigFile } from "./config/loader.js";
 export {
+	codexAppServerConfigSchema,
 	configSchema,
 	defineConfig,
-	isCliProvider,
-	resolveAcpCommandArgs,
+	resolveCodexAppServerCommandArgs,
 } from "./config/schema.js";
 export type {
-	AcpConfig,
-	CliProvider,
+	CodexAppServerConfig,
+	CodexApprovalPolicy,
+	CodexReasoningEffort,
+	CodexSandboxMode,
 	DrMClawConfig,
-	EmbeddedProvider,
 	LLMProvider,
 } from "./config/schema.js";
 
@@ -42,18 +43,15 @@ export type {
 	LLMAdapterRunOptions,
 	PermissionMode,
 } from "./llm/adapter.js";
-export type { AcpSession } from "./llm/acp-session.js";
 
 // Runtime
 export { createAgentRuntime } from "./runtime/agent.js";
 export type {
-	AcpExecutionPolicy,
-	AcpRuntimeOptions,
 	AgentRuntime,
 	AgentRuntimeOptions,
+	CodexExecutionPolicy,
+	CodexRuntimeOptions,
 	CommonExecutionPolicy,
-	DirectExecutionPolicy,
-	DirectRuntimeOptions,
 	ExecutionPolicy,
 	PlainExecutionPolicy,
 	RuntimeEvent,
@@ -64,9 +62,31 @@ export type {
 export { TaskRunner } from "./runner/runner.js";
 export type { TaskResult, TaskStatus, TaskRequest, TaskRecord } from "./runner/types.js";
 
-// Events
-export { JsonlEventStore } from "./events/store.js";
-export type { EventStore, PersistedRuntimeEvent, EventPayload } from "./events/types.js";
+// Events and execution history
+export {
+	ExecutionHistoryJsonlStore,
+	assertSafeTaskId,
+	buildExecutionRunMetadata,
+	buildExecutionTimeline,
+	buildExecutionTranscript,
+	createExecutionHistoryStore,
+	listExecutionRuns,
+	readExecutionRun,
+	summarizeExecutionEvents,
+} from "./events/store.js";
+export type {
+	EventPayload,
+	ExecutionEventSummary,
+	ExecutionHistoryStore,
+	ExecutionRunKind,
+	ExecutionRunMetadata,
+	ExecutionRunRecord,
+	ExecutionTimelineItem,
+	ExecutionTimelineItemKind,
+	ExecutionToolSummary,
+	ExecutionTranscriptMessage,
+	PersistedRuntimeEvent,
+} from "./events/types.js";
 
 // Scheduler
 export { CronService } from "./scheduler/service.js";

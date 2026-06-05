@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DrMClawConfig } from "../config/schema.js";
-import { isCliProvider } from "../config/schema.js";
-import type { EventStore, PersistedRuntimeEvent } from "../events/types.js";
+import { buildExecutionRunMetadata } from "../events/store.js";
+import type { ExecutionHistoryStore, PersistedRuntimeEvent } from "../events/types.js";
 import type { AgentRuntime } from "../runtime/types.js";
 import type { RuntimeEvent } from "../runtime/types.js";
 import type { SkillEntry } from "../skills/types.js";
@@ -23,7 +23,7 @@ export class TaskRunner {
 	private readonly queue: TaskQueue;
 	private readonly history: TaskRecord[] = [];
 	private readonly maxHistory: number;
-	private eventStore?: EventStore;
+	private executionHistoryStore?: ExecutionHistoryStore;
 
 	constructor(
 		private readonly config: DrMClawConfig,
@@ -34,14 +34,14 @@ export class TaskRunner {
 		this.maxHistory = config.taskHistory.maxEntries;
 	}
 
-	/** Attach an event store for durable event persistence. */
-	setEventStore(store: EventStore): void {
-		this.eventStore = store;
+	/** Attach an execution history store for durable run persistence. */
+	setExecutionHistoryStore(store: ExecutionHistoryStore): void {
+		this.executionHistoryStore = store;
 	}
 
-	/** Get the attached event store (if any). */
-	getEventStore(): EventStore | undefined {
-		return this.eventStore;
+	/** Get the attached execution history store (if any). */
+	getExecutionHistoryStore(): ExecutionHistoryStore | undefined {
+		return this.executionHistoryStore;
 	}
 
 	/** Set a handler for queue wait notifications (forwarded to WebSocket). */
@@ -82,15 +82,17 @@ export class TaskRunner {
 		const startedAt = Date.now();
 		let result: TaskResult;
 		let sequence = 0;
+		const persistedEvents: PersistedRuntimeEvent[] = [];
 
 		const persistEvent = async (event: PersistedRuntimeEvent): Promise<void> => {
+			persistedEvents.push(event);
 			// Broadcast BEFORE disk I/O so that WebSocket delivery preserves
 			// the arrival order of streaming chunks.  Without this, concurrent
 			// `append()` calls race and `onPersistedEvent` fires out of order
 			// (the root cause of garbled streaming text like ".53GPT--Codex").
 			options?.onPersistedEvent?.(event);
-			if (this.eventStore) {
-				await this.eventStore.append(taskId, event);
+			if (this.executionHistoryStore) {
+				await this.executionHistoryStore.append(taskId, event);
 			}
 		};
 
@@ -105,7 +107,7 @@ export class TaskRunner {
 			event,
 		});
 
-		// Persist the user prompt so listTasks() can reconstruct it from disk
+		// Persist the user prompt so run history can reconstruct transcripts.
 		await persistEvent(makeEvent("system", { type: "task_init", prompt }));
 
 		try {
@@ -143,6 +145,26 @@ export class TaskRunner {
 			completedAt: Date.now(),
 		};
 
+		if (this.executionHistoryStore) {
+			await this.executionHistoryStore.saveMetadata(
+				buildExecutionRunMetadata({
+					taskId,
+					kind: "task",
+					status: result.status === "completed" ? "completed" : "error",
+					provider: this.config.llm.provider,
+					requestedModel: this.config.llm.model,
+					requestedReasoningEffort: this.config.llm.reasoningEffort,
+					workingDir: request.workingDir,
+					startedAt: new Date(startedAt).toISOString(),
+					finishedAt: new Date(record.completedAt).toISOString(),
+					durationMs: result.durationMs,
+					output: result.output,
+					error: result.error,
+					events: persistedEvents,
+				}),
+			);
+		}
+
 		this.recordTask(record);
 		return record;
 	}
@@ -163,10 +185,9 @@ export class TaskRunner {
 		onEvent?: (event: RuntimeEvent) => void,
 	): Promise<TaskResult> {
 		const systemContext = await assembleSystemPrompt(this.config, this.skills);
-		const backend = isCliProvider(this.config.llm.provider) ? "acp" : "direct";
 
 		return this.runtime.run({
-			backend,
+			backend: "codex",
 			prompt: request.prompt,
 			systemContext,
 			skills: this.skills,

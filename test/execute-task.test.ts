@@ -1,13 +1,16 @@
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configSchema } from "../src/config/schema.js";
+import { listExecutionRuns, readExecutionRun } from "../src/events/store.js";
 import type { PersistedRuntimeEvent } from "../src/events/types.js";
 import type { TaskResult } from "../src/runner/types.js";
 import type { AgentRuntime, AgentRuntimeOptions, RuntimeEvent } from "../src/runtime/types.js";
 import type { SkillEntry } from "../src/skills/types.js";
 
 // ---------------------------------------------------------------------------
-// We test executeTask by mocking the LLM + runtime layer so no real ACP CLI
+// We test executeTask by mocking the LLM + runtime layer so no real Codex CLI
 // is needed.  The test verifies that executeTask correctly loads config via
 // loadDrMClawConfig, composes the runtime chain, returns structured results
 // with provider/model metadata, and disposes adapter resources.
@@ -83,7 +86,7 @@ function simulateSuccessfulRun(output = "Done."): void {
 		const emit = (e: RuntimeEvent) => options.onEvent?.(e);
 		emit({ source: "runtime", type: "lifecycle", phase: "start" });
 		emit({ source: "runtime", type: "lifecycle", phase: "prompt_sent" });
-		emit({ source: "acp", type: "stream", delta: output });
+		emit({ source: "codex", type: "stream", delta: output });
 		const result: TaskResult = { status: "completed", output, durationMs: 42 };
 		emit({ source: "runtime", type: "lifecycle", phase: "end", result });
 		return result;
@@ -114,6 +117,12 @@ describe("executeTask", () => {
 		vi.clearAllMocks();
 		// Default: return schema defaults (no config file loaded)
 		mockLoadConfig.mockImplementation(async (overrides?: Record<string, unknown>) => {
+			if (!overrides || !("dataDir" in overrides)) {
+				return configSchema.parse({
+					...(overrides ?? {}),
+					executionHistory: { enabled: false },
+				});
+			}
 			return configSchema.parse(overrides ?? {});
 		});
 		// Default: no skills discovered
@@ -122,7 +131,7 @@ describe("executeTask", () => {
 	});
 
 	it("composes the LLM-native runtime chain", async () => {
-		simulateSuccessfulRun("Hello from ACP");
+		simulateSuccessfulRun("Hello from Codex");
 
 		const result = await executeTask({
 			prompt: "say hello",
@@ -131,7 +140,7 @@ describe("executeTask", () => {
 		expect(createLLMAdapter).toHaveBeenCalled();
 		expect(createAgentRuntime).toHaveBeenCalled();
 		expect(result.status).toBe("completed");
-		expect(result.output).toBe("Hello from ACP");
+		expect(result.output).toBe("Hello from Codex");
 		expect(result.taskId).toBeDefined();
 		expect(result.durationMs).toBeGreaterThanOrEqual(0);
 	});
@@ -150,12 +159,12 @@ describe("executeTask", () => {
 		await executeTask({
 			prompt: "with overrides",
 			config: {
-				llm: { provider: "claude-cli" },
+				llm: { model: "gpt-5.4" },
 			},
 		});
 
 		const overrides = mockLoadConfig.mock.calls.at(-1)?.[0];
-		expect(overrides?.llm?.provider).toBe("claude-cli");
+		expect(overrides?.llm?.model).toBe("gpt-5.4");
 	});
 
 	it("merges permissionMode into config overrides", async () => {
@@ -171,16 +180,20 @@ describe("executeTask", () => {
 		expect(overrides?.llm?.permissionMode).toBe("deny-all");
 	});
 
-	it("returns provider and requestedModel from resolved config", async () => {
+	it("returns provider, requestedModel, and requestedReasoningEffort from resolved config", async () => {
 		mockLoadConfig.mockResolvedValue(
-			configSchema.parse({ llm: { provider: "claude-cli", model: "claude-sonnet-4.6" } }),
+			configSchema.parse({
+				llm: { model: "gpt-5.4", reasoningEffort: "high" },
+				executionHistory: { enabled: false },
+			}),
 		);
 		simulateSuccessfulRun();
 
 		const result = await executeTask({ prompt: "probe" });
 
-		expect(result.provider).toBe("claude-cli");
-		expect(result.requestedModel).toBe("claude-sonnet-4.6");
+		expect(result.provider).toBe("codex-app-server");
+		expect(result.requestedModel).toBe("gpt-5.4");
+		expect(result.requestedReasoningEffort).toBe("high");
 	});
 
 	it("returns persisted events with source tags", async () => {
@@ -195,9 +208,9 @@ describe("executeTask", () => {
 		expect(initEvent).toBeDefined();
 		expect(initEvent?.source).toBe("system");
 
-		// Must include ACP events (stream delta)
-		const acpEvents = result.events.filter((e) => e.source === "acp");
-		expect(acpEvents.length).toBeGreaterThan(0);
+		// Must include Codex events (stream delta)
+		const codexEvents = result.events.filter((e) => e.source === "codex");
+		expect(codexEvents.length).toBeGreaterThan(0);
 
 		// Must include runtime lifecycle events
 		const lifecycleEvents = result.events.filter(
@@ -207,12 +220,12 @@ describe("executeTask", () => {
 	});
 
 	it("returns error status when runtime fails", async () => {
-		simulateErrorRun("ACP CLI not found");
+		simulateErrorRun("Codex CLI not found");
 
 		const result = await executeTask({ prompt: "fail" });
 
 		expect(result.status).toBe("error");
-		expect(result.error).toContain("ACP CLI not found");
+		expect(result.error).toContain("Codex CLI not found");
 	});
 
 	it("disposes adapter after successful execution", async () => {
@@ -424,28 +437,44 @@ describe("executeTask", () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// Persistence: events are in-memory only
+	// Persistence: events are returned in-memory and persisted by default
 	// -----------------------------------------------------------------------
 
-	it("events are collected in-memory — no EventStore wired", async () => {
+	it("events are collected in-memory and persisted by default", async () => {
 		simulateSuccessfulRun("output");
+		const dataDir = await mkdtemp(join(tmpdir(), "drmclaw-execute-history-"));
 
-		const result = await executeTask({ prompt: "check events" });
+		try {
+			const result = await executeTask({
+				prompt: "check events",
+				config: { dataDir },
+			});
 
-		// Events are returned in the result but are in-memory snapshots
-		expect(result.events.length).toBeGreaterThan(0);
-		// Every event has the PersistedRuntimeEvent envelope shape
-		for (const e of result.events) {
-			expect(e).toHaveProperty("taskId");
-			expect(e).toHaveProperty("sequence");
-			expect(e).toHaveProperty("timestamp");
-			expect(e).toHaveProperty("source");
-			expect(e).toHaveProperty("event");
+			expect(result.events.length).toBeGreaterThan(0);
+			for (const e of result.events) {
+				expect(e).toHaveProperty("taskId");
+				expect(e).toHaveProperty("sequence");
+				expect(e).toHaveProperty("timestamp");
+				expect(e).toHaveProperty("source");
+				expect(e).toHaveProperty("event");
+			}
+			const ids = new Set(result.events.map((e) => e.taskId));
+			expect(ids.size).toBe(1);
+			expect(ids.has(result.taskId)).toBe(true);
+
+			const run = await readExecutionRun(result.taskId, { dataDir });
+			expect(run?.metadata).toMatchObject({
+				taskId: result.taskId,
+				kind: "task",
+				status: "completed",
+				provider: "codex-app-server",
+				promptPreview: "check events",
+				outputPreview: "output",
+			});
+			expect(run?.transcript.map((message) => message.role)).toEqual(["user", "assistant"]);
+		} finally {
+			await rm(dataDir, { recursive: true, force: true });
 		}
-		// taskId is consistent across all events
-		const ids = new Set(result.events.map((e) => e.taskId));
-		expect(ids.size).toBe(1);
-		expect(ids.has(result.taskId)).toBe(true);
 	});
 
 	// -----------------------------------------------------------------------
@@ -601,19 +630,26 @@ describe("executeTask", () => {
 			mockLoadSkills.mockResolvedValue([skill("git")]);
 			mockLoadSkillsFromDirs.mockResolvedValue([]);
 			simulateSuccessfulRun();
+			const dataDir = await mkdtemp(join(tmpdir(), "drmclaw-preflight-history-"));
 
-			const result = await executeTask({
-				prompt: "reload tickets",
-				policy: { skillAllowlist: ["jira"] },
-			});
+			try {
+				const result = await executeTask({
+					prompt: "reload tickets",
+					policy: { skillAllowlist: ["jira"] },
+					config: { dataDir },
+				});
 
-			expect(result.status).toBe("error");
-			const codes = result.skillResolutionErrors?.map((e) => e.code) ?? [];
-			expect(codes).toContain("SKILL_NOT_FOUND");
-			expect(result.skillResolutionErrors?.find((e) => e.code === "SKILL_NOT_FOUND")?.skill).toBe(
-				"jira",
-			);
-			expect(mockRuntimeRun).not.toHaveBeenCalled();
+				expect(result.status).toBe("error");
+				const codes = result.skillResolutionErrors?.map((e) => e.code) ?? [];
+				expect(codes).toContain("SKILL_NOT_FOUND");
+				expect(result.skillResolutionErrors?.find((e) => e.code === "SKILL_NOT_FOUND")?.skill).toBe(
+					"jira",
+				);
+				expect(mockRuntimeRun).not.toHaveBeenCalled();
+				expect(await listExecutionRuns({ dataDir })).toEqual([]);
+			} finally {
+				await rm(dataDir, { recursive: true, force: true });
+			}
 		});
 
 		it("returns SKILL_NOT_READY when the allowlisted skill is present but unready", async () => {
