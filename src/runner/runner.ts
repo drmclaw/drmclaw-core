@@ -9,6 +9,14 @@ import { assembleSystemPrompt } from "./prompt.js";
 import { TaskQueue } from "./queue.js";
 import type { TaskRecord, TaskRequest, TaskResult } from "./types.js";
 
+interface TaskRunExecutionHistoryOptions {
+	store: ExecutionHistoryStore;
+	kind?: "task" | "skill-action";
+	skill?: string;
+	action?: string;
+	inputs?: Record<string, unknown>;
+}
+
 /**
  * Task Runner — orchestrates each task run.
  *
@@ -65,6 +73,7 @@ export class TaskRunner {
 			workingDir?: string;
 			onEvent?: (event: RuntimeEvent) => void;
 			onPersistedEvent?: (event: PersistedRuntimeEvent) => void;
+			executionHistory?: TaskRunExecutionHistoryOptions;
 		},
 	): Promise<TaskRecord> {
 		const taskId = randomUUID();
@@ -83,17 +92,42 @@ export class TaskRunner {
 		let result: TaskResult;
 		let sequence = 0;
 		const persistedEvents: PersistedRuntimeEvent[] = [];
+		const executionHistory =
+			options?.executionHistory ??
+			(this.executionHistoryStore ? { store: this.executionHistoryStore, kind: "task" as const } : undefined);
+		let appendQueue = Promise.resolve();
 
-		const persistEvent = async (event: PersistedRuntimeEvent): Promise<void> => {
+		const saveHistoryMetadata = async (metadataArgs: Parameters<typeof buildExecutionRunMetadata>[0]) => {
+			if (!executionHistory) return;
+			try {
+				await executionHistory.store.saveMetadata(buildExecutionRunMetadata(metadataArgs));
+			} catch (err) {
+				console.warn(
+					"[drmclaw] Failed to save execution metadata:",
+					err instanceof Error ? err.message : err,
+				);
+			}
+		};
+
+		const persistEvent = (event: PersistedRuntimeEvent): Promise<void> => {
 			persistedEvents.push(event);
 			// Broadcast BEFORE disk I/O so that WebSocket delivery preserves
 			// the arrival order of streaming chunks.  Without this, concurrent
 			// `append()` calls race and `onPersistedEvent` fires out of order
 			// (the root cause of garbled streaming text like ".53GPT--Codex").
 			options?.onPersistedEvent?.(event);
-			if (this.executionHistoryStore) {
-				await this.executionHistoryStore.append(taskId, event);
+			if (executionHistory) {
+				appendQueue = appendQueue
+					.then(() => executionHistory.store.append(taskId, event))
+					.catch((err) => {
+						console.warn(
+							"[drmclaw] Failed to append execution event:",
+							err instanceof Error ? err.message : err,
+						);
+					});
+				return appendQueue;
 			}
+			return Promise.resolve();
 		};
 
 		const makeEvent = (
@@ -109,6 +143,24 @@ export class TaskRunner {
 
 		// Persist the user prompt so run history can reconstruct transcripts.
 		await persistEvent(makeEvent("system", { type: "task_init", prompt }));
+		if (executionHistory) {
+			await appendQueue;
+			await saveHistoryMetadata({
+				taskId,
+				kind: executionHistory.kind ?? "task",
+				status: "running",
+				provider: this.config.llm.provider,
+				requestedModel: this.config.llm.model,
+				requestedReasoningEffort: this.config.llm.reasoningEffort,
+				workingDir: request.workingDir,
+				skill: executionHistory.skill,
+				action: executionHistory.action,
+				inputs: executionHistory.inputs,
+				processId: process.pid,
+				startedAt: new Date(startedAt).toISOString(),
+				events: persistedEvents,
+			});
+		}
 
 		try {
 			result = await this.executeTask(request, options?.sessionId, (runtimeEvent) => {
@@ -145,24 +197,27 @@ export class TaskRunner {
 			completedAt: Date.now(),
 		};
 
-		if (this.executionHistoryStore) {
-			await this.executionHistoryStore.saveMetadata(
-				buildExecutionRunMetadata({
-					taskId,
-					kind: "task",
-					status: result.status === "completed" ? "completed" : "error",
-					provider: this.config.llm.provider,
-					requestedModel: this.config.llm.model,
-					requestedReasoningEffort: this.config.llm.reasoningEffort,
-					workingDir: request.workingDir,
-					startedAt: new Date(startedAt).toISOString(),
-					finishedAt: new Date(record.completedAt).toISOString(),
-					durationMs: result.durationMs,
-					output: result.output,
-					error: result.error,
-					events: persistedEvents,
-				}),
-			);
+		if (executionHistory) {
+			await appendQueue;
+			await saveHistoryMetadata({
+				taskId,
+				kind: executionHistory.kind ?? "task",
+				status: result.status === "completed" ? "completed" : "error",
+				provider: this.config.llm.provider,
+				requestedModel: this.config.llm.model,
+				requestedReasoningEffort: this.config.llm.reasoningEffort,
+				workingDir: request.workingDir,
+				skill: executionHistory.skill,
+				action: executionHistory.action,
+				inputs: executionHistory.inputs,
+				processId: process.pid,
+				startedAt: new Date(startedAt).toISOString(),
+				finishedAt: new Date(record.completedAt).toISOString(),
+				durationMs: result.durationMs,
+				output: result.output,
+				error: result.error,
+				events: persistedEvents,
+			});
 		}
 
 		this.recordTask(record);

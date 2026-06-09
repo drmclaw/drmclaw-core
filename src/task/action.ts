@@ -48,7 +48,6 @@ import type { PersistedRuntimeEvent } from "../events/types.js";
 import type { RuntimeEvent } from "../runtime/types.js";
 import { type SkillResolutionError, resolveSkillsForRequest } from "../skills/resolve.js";
 import type { SkillAction, SkillEntry } from "../skills/types.js";
-import { persistExecutionHistory } from "./history.js";
 import { runPromptViaRuntime } from "./runtime-chain.js";
 
 /**
@@ -198,7 +197,10 @@ function toValidationError(err: SkillResolutionError): ActionValidationError {
  */
 export async function executeSkillAction(
 	request: ExecuteSkillActionRequest,
-	options?: { onEvent?: (event: RuntimeEvent) => void },
+	options?: {
+		onEvent?: (event: RuntimeEvent) => void;
+		onPersistedEvent?: (event: PersistedRuntimeEvent) => void;
+	},
 ): Promise<ExecuteSkillActionResult> {
 	const startTime = Date.now();
 	let config: DrMClawConfig | undefined;
@@ -393,6 +395,11 @@ export async function executeSkillAction(
 			timeoutMs: request.timeoutMs,
 			maxOutputChars: request.maxOutputChars,
 			onEvent: options?.onEvent,
+			onPersistedEvent: options?.onPersistedEvent,
+			historyKind: "skill-action",
+			historySkill: request.skill,
+			historyAction: request.action,
+			historyInputs: resolvedInputs,
 			startTime,
 		});
 
@@ -407,26 +414,6 @@ export async function executeSkillAction(
 				inputs: resolvedInputs,
 			},
 		};
-
-		await persistExecutionHistory({
-			config,
-			taskId: result.taskId,
-			kind: "skill-action",
-			status: result.status,
-			provider: result.provider,
-			requestedModel: result.requestedModel,
-			requestedReasoningEffort: result.requestedReasoningEffort,
-			workingDir: request.workingDir,
-			skill: request.skill,
-			action: request.action,
-			inputs: resolvedInputs,
-			startedAt: new Date(startTime).toISOString(),
-			finishedAt: new Date().toISOString(),
-			durationMs: result.durationMs,
-			output: result.output,
-			error: result.error,
-			events: result.events,
-		});
 
 		return result;
 	} catch (err) {

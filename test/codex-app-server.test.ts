@@ -13,12 +13,16 @@ describe("CodexAppServerAdapter", () => {
 	let recordPath: string;
 	const originalRecord = process.env.FAKE_CODEX_RECORD;
 	const originalMode = process.env.FAKE_CODEX_MODE;
+	const originalRecordEnv = process.env.FAKE_CODEX_RECORD_ENV;
+	const originalNpmConfigPrefix = process.env.npm_config_prefix;
+	const originalUpperNpmConfigPrefix = process.env.NPM_CONFIG_PREFIX;
 
 	beforeEach(async () => {
 		tmpDir = await mkdtemp(join(tmpdir(), "drmclaw-codex-app-server-"));
 		recordPath = join(tmpDir, "messages.jsonl");
 		process.env.FAKE_CODEX_RECORD = recordPath;
 		process.env.FAKE_CODEX_MODE = undefined;
+		process.env.FAKE_CODEX_RECORD_ENV = undefined;
 	});
 
 	afterEach(async () => {
@@ -31,6 +35,21 @@ describe("CodexAppServerAdapter", () => {
 			process.env.FAKE_CODEX_MODE = undefined;
 		} else {
 			process.env.FAKE_CODEX_MODE = originalMode;
+		}
+		if (originalRecordEnv === undefined) {
+			process.env.FAKE_CODEX_RECORD_ENV = undefined;
+		} else {
+			process.env.FAKE_CODEX_RECORD_ENV = originalRecordEnv;
+		}
+		if (originalNpmConfigPrefix === undefined) {
+			process.env.npm_config_prefix = undefined;
+		} else {
+			process.env.npm_config_prefix = originalNpmConfigPrefix;
+		}
+		if (originalUpperNpmConfigPrefix === undefined) {
+			process.env.NPM_CONFIG_PREFIX = undefined;
+		} else {
+			process.env.NPM_CONFIG_PREFIX = originalUpperNpmConfigPrefix;
 		}
 		await rm(tmpDir, { recursive: true, force: true });
 	});
@@ -146,6 +165,25 @@ describe("CodexAppServerAdapter", () => {
 		expect(turnStart.effort).toBe("high");
 	});
 
+	it("does not pass npm prefix variables to the Codex child process", async () => {
+		process.env.FAKE_CODEX_RECORD_ENV = "1";
+		process.env.npm_config_prefix = "/opt/homebrew";
+		process.env.NPM_CONFIG_PREFIX = "/opt/homebrew";
+		const adapter = makeAdapter();
+
+		const result = await adapter.run({ prompt: "check env" });
+
+		expect(result.status).toBe("completed");
+		const messages = await recordedMessages();
+		const envRecord = messages.find((message) => message.method === "env") as
+			| { params?: { npm_config_prefix?: string | null; NPM_CONFIG_PREFIX?: string | null } }
+			| undefined;
+		expect(envRecord?.params).toEqual({
+			npm_config_prefix: null,
+			NPM_CONFIG_PREFIX: null,
+		});
+	});
+
 	it("returns an error result for failed turns", async () => {
 		process.env.FAKE_CODEX_MODE = "fail";
 		const adapter = makeAdapter();
@@ -155,6 +193,27 @@ describe("CodexAppServerAdapter", () => {
 		expect(result.status).toBe("error");
 		expect(result.output).toBe("Hello from Codex");
 		expect(result.error).toContain("fake turn failure");
+	});
+
+	it("returns an error result when the Codex command is missing", async () => {
+		const config = configSchema.parse({
+			llm: {
+				codex: {
+					command: "drmclaw-missing-codex-command",
+					args: ["app-server"],
+				},
+			},
+		});
+		const adapter = new CodexAppServerAdapter(config);
+
+		const result = await adapter.run({ prompt: "test missing command" });
+
+		expect(result.status).toBe("error");
+		expect(result.error).toContain(
+			"drmclaw-core runtime unavailable: Codex command not found (drmclaw-missing-codex-command)",
+		);
+		expect(result.error).toContain("PATH");
+		expect(result.error).toContain("llm.codex.command");
 	});
 
 	it("kills the App Server process when disposed mid-turn", async () => {

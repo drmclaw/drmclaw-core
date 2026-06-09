@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -126,6 +126,95 @@ describe("ExecutionHistoryJsonlStore", () => {
 		expect((await store.listRuns({ limit: 1 })).map((run) => run.taskId)).toEqual([late]);
 	});
 
+	it("marks orphaned running runs stale on list/read", async () => {
+		const taskId = "task-stale";
+		const events = [makeEvent(taskId, 0, { type: "task_init", prompt: "stale prompt" }, "system")];
+		for (const event of events) await store.append(taskId, event);
+		await store.saveMetadata(
+			makeMetadata(taskId, events, {
+				status: "running",
+				finishedAt: null,
+				durationMs: null,
+				processId: 999_999_999,
+				startedAt: "2026-06-05T00:00:00.000Z",
+			}),
+		);
+
+		const runs = await store.listRuns();
+
+		expect(runs[0]).toMatchObject({
+			taskId,
+			status: "stale",
+			errorPreview: "Run marked stale because no active drmclaw-core process owns it.",
+		});
+		expect(runs[0]?.finishedAt).not.toBeNull();
+		expect(runs[0]?.durationMs).not.toBeNull();
+
+		const detail = await store.readRun(taskId);
+		expect(detail?.metadata.status).toBe("stale");
+		expect(detail?.transcript[0]?.content).toBe("stale prompt");
+	});
+
+	it("keeps recent ownerless running runs active", async () => {
+		const taskId = "task-recent-running";
+		const startedAt = new Date();
+		await store.saveMetadata(
+			makeMetadata(taskId, [], {
+				status: "running",
+				finishedAt: null,
+				durationMs: null,
+				startedAt: startedAt.toISOString(),
+			}),
+		);
+
+		const marked = await store.markStaleRuns({
+			now: new Date(startedAt.getTime() + 5 * 60 * 1_000),
+			staleAfterMs: 15 * 60 * 1_000,
+		});
+
+		expect(marked).toBe(0);
+		expect((await store.readRun(taskId))?.metadata.status).toBe("running");
+	});
+
+	it("ignores run metadata whose task id does not match its directory", async () => {
+		const badTaskId = "task-bad-metadata";
+		const badRunDir = join(tmpDir, "runs", badTaskId);
+		await mkdir(badRunDir, { recursive: true });
+		await writeFile(
+			join(badRunDir, "metadata.json"),
+			JSON.stringify(
+				{
+					...makeMetadata("../escape", [], {
+						status: "running",
+						finishedAt: null,
+						durationMs: null,
+						startedAt: "2026-06-05T00:00:00.000Z",
+					}),
+				},
+				null,
+				2,
+			),
+			"utf-8",
+		);
+
+		const goodTaskId = "task-good-stale";
+		await store.saveMetadata(
+			makeMetadata(goodTaskId, [], {
+				status: "running",
+				finishedAt: null,
+				durationMs: null,
+				processId: 999_999_999,
+				startedAt: "2026-06-05T00:00:00.000Z",
+			}),
+		);
+
+		const runs = await store.listRuns();
+
+		expect(runs.map((run) => run.taskId)).toEqual([goodTaskId]);
+		expect(runs[0]?.status).toBe("stale");
+		expect(await store.readRun(badTaskId)).toBeNull();
+	});
+
 	it("returns null for missing runs and rejects unsafe ids", async () => {
 		expect(await store.readRun("missing")).toBeNull();
 		await expect(store.readRun("../escape")).rejects.toThrow("invalid task id");
@@ -134,9 +223,7 @@ describe("ExecutionHistoryJsonlStore", () => {
 	it("skips malformed event lines while reading", async () => {
 		const taskId = "task-malformed";
 		const runDir = join(tmpDir, "runs", taskId);
-		await writeFile(join(runDir, "events.jsonl"), "", "utf-8").catch(async () => {
-			await store.append(taskId, makeEvent(taskId, 0, { type: "stream", delta: "ok" }, "codex"));
-		});
+		await mkdir(runDir, { recursive: true });
 		await writeFile(
 			join(runDir, "events.jsonl"),
 			`${JSON.stringify(makeEvent(taskId, 0, { type: "stream", delta: "ok" }, "codex"))}\nnot-json\n`,

@@ -23,6 +23,7 @@
  */
 
 import type { DrMClawConfig } from "../config/schema.js";
+import { buildExecutionRunMetadata, createExecutionHistoryStore } from "../events/store.js";
 import type { PersistedRuntimeEvent } from "../events/types.js";
 import type { LLMAdapter } from "../llm/adapter.js";
 import { createLLMAdapter } from "../llm/index.js";
@@ -41,6 +42,11 @@ export interface RunPromptViaRuntimeArgs {
 	timeoutMs?: number;
 	maxOutputChars?: number;
 	onEvent?: (event: RuntimeEvent) => void;
+	onPersistedEvent?: (event: PersistedRuntimeEvent) => void;
+	historyKind?: "task" | "skill-action";
+	historySkill?: string;
+	historyAction?: string;
+	historyInputs?: Record<string, unknown>;
 	/** Wall-clock start time for duration accounting on error paths. */
 	startTime: number;
 }
@@ -68,6 +74,9 @@ export async function runPromptViaRuntime(
 	let lastTaskId = "";
 	let adapter: LLMAdapter | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	const executionHistoryStore = args.config.executionHistory.enabled
+		? createExecutionHistoryStore(args.config.dataDir)
+		: undefined;
 	// Gate that prevents late events from the abandoned run promise
 	// from mutating the snapshot after timeout/completion.
 	let accepting = true;
@@ -87,7 +96,17 @@ export async function runPromptViaRuntime(
 				if (!accepting) return;
 				events.push(event);
 				if (event.taskId) lastTaskId = event.taskId;
+				args.onPersistedEvent?.(event);
 			},
+			executionHistory: executionHistoryStore
+				? {
+						store: executionHistoryStore,
+						kind: args.historyKind ?? "task",
+						skill: args.historySkill,
+						action: args.historyAction,
+						inputs: args.historyInputs,
+					}
+				: undefined,
 		});
 
 		let record: TaskRecord;
@@ -130,6 +149,34 @@ export async function runPromptViaRuntime(
 	} catch (err) {
 		accepting = false;
 		const message = err instanceof Error ? err.message : String(err);
+		if (executionHistoryStore && lastTaskId) {
+			try {
+				await executionHistoryStore.saveMetadata(
+					buildExecutionRunMetadata({
+						taskId: lastTaskId,
+						kind: args.historyKind ?? "task",
+						status: "error",
+						provider: args.config.llm.provider,
+						requestedModel: args.config.llm.model,
+						requestedReasoningEffort: args.config.llm.reasoningEffort,
+						workingDir: args.workingDir,
+						skill: args.historySkill,
+						action: args.historyAction,
+						inputs: args.historyInputs,
+						startedAt: new Date(args.startTime).toISOString(),
+						finishedAt: new Date().toISOString(),
+						durationMs: Date.now() - args.startTime,
+						error: message,
+						events,
+					}),
+				);
+			} catch (historyError) {
+				console.warn(
+					"[drmclaw] Failed to finalize execution history:",
+					historyError instanceof Error ? historyError.message : historyError,
+				);
+			}
+		}
 		return {
 			status: "error",
 			output: "",

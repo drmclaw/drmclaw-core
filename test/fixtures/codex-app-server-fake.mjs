@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 
 const recordPath = process.env.FAKE_CODEX_RECORD;
 const mode = process.env.FAKE_CODEX_MODE ?? "complete";
+const recordEnv = process.env.FAKE_CODEX_RECORD_ENV === "1";
 
 function record(message) {
 	if (recordPath) {
@@ -19,6 +20,16 @@ function respond(id, result) {
 }
 
 const rl = createInterface({ input: process.stdin });
+
+if (recordEnv) {
+	record({
+		method: "env",
+		params: {
+			npm_config_prefix: process.env.npm_config_prefix ?? null,
+			NPM_CONFIG_PREFIX: process.env.NPM_CONFIG_PREFIX ?? null,
+		},
+	});
+}
 
 rl.on("line", (line) => {
 	if (!line.trim()) return;

@@ -1,9 +1,9 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { DrMClawConfig } from "../config/schema.js";
-import { resolveCodexAppServerCommandArgs } from "../config/schema.js";
 import type { TaskResult } from "../runner/types.js";
 import type { AdapterEvent, LLMAdapter, LLMAdapterRunOptions } from "./adapter.js";
+import { resolveCodexAppServerExecutable } from "./codex-command.js";
 import type {
 	AgentMessageDeltaNotification,
 	InitializeParams,
@@ -57,6 +57,29 @@ function errorMessage(error: unknown): string {
 		if (typeof message === "string") return message;
 	}
 	return JSON.stringify(error);
+}
+
+function commandNotFoundMessage(command: string): string {
+	return `drmclaw-core runtime unavailable: Codex command not found (${command}). Install the Codex CLI, make it available on PATH, or set llm.codex.command to an executable path.`;
+}
+
+function processErrorMessage(command: string, error: unknown): string {
+	if (
+		error &&
+		typeof error === "object" &&
+		"code" in error &&
+		(error as { code?: unknown }).code === "ENOENT"
+	) {
+		return commandNotFoundMessage(command);
+	}
+	return errorMessage(error);
+}
+
+function codexChildEnv(): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	delete env.npm_config_prefix;
+	delete env.NPM_CONFIG_PREFIX;
+	return env;
 }
 
 function toolNameForItem(item: ThreadItem): string {
@@ -289,7 +312,7 @@ export class CodexAppServerAdapter implements LLMAdapter {
 
 	async run(options: LLMAdapterRunOptions): Promise<TaskResult> {
 		const startTime = Date.now();
-		const { command, args } = resolveCodexAppServerCommandArgs(this.config.llm.codex);
+		const { command, args, found } = resolveCodexAppServerExecutable(this.config.llm.codex);
 		let output = "";
 		let completeTurn: ((turn: Turn) => void) | undefined;
 
@@ -298,7 +321,14 @@ export class CodexAppServerAdapter implements LLMAdapter {
 		});
 
 		try {
-			const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+			if (!found) {
+				throw new Error(commandNotFoundMessage(command));
+			}
+
+			const proc = spawn(command, args, {
+				stdio: ["pipe", "pipe", "pipe"],
+				env: codexChildEnv(),
+			});
 			this.activeProcess = proc;
 			const processClosed = new Promise<never>((_, reject) => {
 				proc.once("exit", (code, signal) => {
@@ -308,8 +338,10 @@ export class CodexAppServerAdapter implements LLMAdapter {
 						),
 					);
 				});
-				proc.once("error", (error) => reject(error));
+				proc.once("error", (error) => reject(new Error(processErrorMessage(command, error))));
 			});
+			const withProcess = <T>(promise: Promise<T>): Promise<T> =>
+				Promise.race([promise, processClosed]);
 
 			const client = new CodexJsonRpcClient(
 				proc,
@@ -377,14 +409,14 @@ export class CodexAppServerAdapter implements LLMAdapter {
 			);
 			this.activeClient = client;
 
-			await client.request("initialize", {
+			await withProcess(client.request("initialize", {
 				clientInfo: {
 					name: "drmclaw_core",
 					title: "Dr. MClaw Core",
 					version: "0.1.0",
 				},
 				capabilities: null,
-			} satisfies InitializeParams);
+			} satisfies InitializeParams));
 			client.notify("initialized", {});
 
 			const threadParams: ThreadStartParams = {
@@ -395,7 +427,9 @@ export class CodexAppServerAdapter implements LLMAdapter {
 				developerInstructions: options.systemContext ?? null,
 				ephemeral: true,
 			};
-			const thread = await client.request<ThreadStartResponse>("thread/start", threadParams);
+			const thread = await withProcess(
+				client.request<ThreadStartResponse>("thread/start", threadParams),
+			);
 			this.activeThreadId = thread.thread.id;
 
 			const turnParams: TurnStartParams = {
@@ -406,9 +440,11 @@ export class CodexAppServerAdapter implements LLMAdapter {
 				model: this.config.llm.model ?? null,
 				effort: this.config.llm.reasoningEffort ?? null,
 			};
-			const startedTurn = await client.request<TurnStartResponse>("turn/start", turnParams);
+			const startedTurn = await withProcess(
+				client.request<TurnStartResponse>("turn/start", turnParams),
+			);
 			this.activeTurnId = startedTurn.turn.id;
-			const turn = await Promise.race([turnCompleted, processClosed]);
+			const turn = await withProcess(turnCompleted);
 			this.activeTurnId = undefined;
 
 			if (!output) {

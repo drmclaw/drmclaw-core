@@ -13,6 +13,7 @@ import type {
 const PREVIEW_LENGTH = 1_000;
 const TIMELINE_PREVIEW_LENGTH = 600;
 const SAFE_TASK_ID_RE = /^[A-Za-z0-9._-]+$/;
+const DEFAULT_STALE_AFTER_MS = 15 * 60 * 1_000;
 
 function truncate(value: string | undefined, maxLength = PREVIEW_LENGTH): string | undefined {
 	if (!value) return undefined;
@@ -386,9 +387,10 @@ export function buildExecutionRunMetadata(args: {
 	skill?: string;
 	action?: string;
 	inputs?: Record<string, unknown>;
+	processId?: number;
 	startedAt: string;
-	finishedAt: string;
-	durationMs: number;
+	finishedAt?: string | null;
+	durationMs?: number | null;
 	output?: string;
 	error?: string;
 	events: PersistedRuntimeEvent[];
@@ -406,9 +408,10 @@ export function buildExecutionRunMetadata(args: {
 		skill: args.skill,
 		action: args.action,
 		inputs: args.inputs,
+		processId: args.processId,
 		startedAt: args.startedAt,
-		finishedAt: args.finishedAt,
-		durationMs: args.durationMs,
+		finishedAt: args.finishedAt ?? null,
+		durationMs: args.durationMs ?? null,
 		outputPreview: truncate(args.output),
 		errorPreview: truncate(args.error),
 		promptPreview: truncate(prompt),
@@ -440,6 +443,67 @@ export class ExecutionHistoryJsonlStore implements ExecutionHistoryStore {
 		await writeFile(join(dir, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`, "utf-8");
 	}
 
+	private async readMetadata(taskId: string): Promise<ExecutionRunMetadata | null> {
+		try {
+			const raw = await readFile(join(this.runDir(taskId), "metadata.json"), "utf-8");
+			const metadata = JSON.parse(raw) as ExecutionRunMetadata;
+			return metadata.taskId === taskId ? metadata : null;
+		} catch {
+			return null;
+		}
+	}
+
+	private isProcessAlive(pid: number): boolean {
+		if (!Number.isInteger(pid) || pid <= 0) return false;
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	async markStaleRuns(options: { now?: Date; staleAfterMs?: number } = {}): Promise<number> {
+		let entries: Array<{ isDirectory(): boolean; name: string }>;
+		try {
+			entries = await readdir(this.runsDir, { withFileTypes: true });
+		} catch {
+			return 0;
+		}
+
+		const now = options.now ?? new Date();
+		const nowMs = now.getTime();
+		const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+		let marked = 0;
+
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			if (!SAFE_TASK_ID_RE.test(entry.name)) continue;
+			const metadata = await this.readMetadata(entry.name);
+			if (!metadata || metadata.status !== "running") continue;
+
+			const ownerAlive =
+				typeof metadata.processId === "number" && this.isProcessAlive(metadata.processId);
+			const startedMs = Date.parse(metadata.startedAt);
+			const ageMs = Number.isFinite(startedMs) ? nowMs - startedMs : Number.POSITIVE_INFINITY;
+			if (ownerAlive || ageMs < staleAfterMs) continue;
+
+			const events = await this.listRunEvents(metadata.taskId);
+			const staleMetadata = buildExecutionRunMetadata({
+				...metadata,
+				status: "stale",
+				finishedAt: now.toISOString(),
+				durationMs: Number.isFinite(startedMs) ? Math.max(0, nowMs - startedMs) : null,
+				error: "Run marked stale because no active drmclaw-core process owns it.",
+				events,
+			});
+			await this.saveMetadata(staleMetadata);
+			marked += 1;
+		}
+
+		return marked;
+	}
+
 	async listRunEvents(taskId: string): Promise<PersistedRuntimeEvent[]> {
 		const filePath = join(this.runDir(taskId), "events.jsonl");
 		let content: string;
@@ -463,6 +527,7 @@ export class ExecutionHistoryJsonlStore implements ExecutionHistoryStore {
 	}
 
 	async listRuns(options: { limit?: number } = {}): Promise<ExecutionRunMetadata[]> {
+		await this.markStaleRuns();
 		let entries: Array<{ isDirectory(): boolean; name: string }>;
 		try {
 			entries = await readdir(this.runsDir, { withFileTypes: true });
@@ -475,15 +540,17 @@ export class ExecutionHistoryJsonlStore implements ExecutionHistoryStore {
 			if (!entry.isDirectory()) continue;
 			if (!SAFE_TASK_ID_RE.test(entry.name)) continue;
 			try {
-				const raw = await readFile(join(this.runsDir, entry.name, "metadata.json"), "utf-8");
-				runs.push(JSON.parse(raw) as ExecutionRunMetadata);
+				const metadata = await this.readMetadata(entry.name);
+				if (metadata) runs.push(metadata);
 			} catch {
 				// Skip in-flight or unreadable runs without finalized metadata.
 			}
 		}
 
 		runs.sort((left, right) => {
-			const stamp = Date.parse(right.finishedAt) - Date.parse(left.finishedAt);
+			const rightStamp = Date.parse(right.finishedAt ?? right.startedAt);
+			const leftStamp = Date.parse(left.finishedAt ?? left.startedAt);
+			const stamp = rightStamp - leftStamp;
 			if (stamp !== 0) return stamp;
 			return right.taskId.localeCompare(left.taskId);
 		});
@@ -493,14 +560,10 @@ export class ExecutionHistoryJsonlStore implements ExecutionHistoryStore {
 	}
 
 	async readRun(taskId: string): Promise<ExecutionRunRecord | null> {
-		const dir = this.runDir(taskId);
-		let metadata: ExecutionRunMetadata;
-		try {
-			const raw = await readFile(join(dir, "metadata.json"), "utf-8");
-			metadata = JSON.parse(raw) as ExecutionRunMetadata;
-		} catch {
-			return null;
-		}
+		assertSafeTaskId(taskId);
+		await this.markStaleRuns();
+		const metadata = await this.readMetadata(taskId);
+		if (!metadata) return null;
 
 		const events = await this.listRunEvents(taskId);
 		return {
@@ -525,6 +588,17 @@ export async function listExecutionRuns(
 ): Promise<ExecutionRunMetadata[]> {
 	const store = createExecutionHistoryStore(options.dataDir ?? ".drmclaw");
 	return store.listRuns({ limit: options.limit });
+}
+
+export async function markStaleExecutionRuns(
+	options: {
+		dataDir?: string;
+		now?: Date;
+		staleAfterMs?: number;
+	} = {},
+): Promise<number> {
+	const store = createExecutionHistoryStore(options.dataDir ?? ".drmclaw");
+	return store.markStaleRuns({ now: options.now, staleAfterMs: options.staleAfterMs });
 }
 
 export async function readExecutionRun(

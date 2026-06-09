@@ -32,7 +32,6 @@ import {
 	formatSkillResolutionErrors,
 	resolveSkillsForRequest,
 } from "../skills/resolve.js";
-import { persistExecutionHistory } from "./history.js";
 import { runPromptViaRuntime } from "./runtime-chain.js";
 
 /**
@@ -164,7 +163,10 @@ export interface ExecuteTaskResult {
  */
 export async function executeTask(
 	request: ExecuteTaskRequest,
-	options?: { onEvent?: (event: RuntimeEvent) => void },
+	options?: {
+		onEvent?: (event: RuntimeEvent) => void;
+		onPersistedEvent?: (event: PersistedRuntimeEvent) => void;
+	},
 ): Promise<ExecuteTaskResult> {
 	// 0. Validate prompt — must be non-empty
 	if (!request.prompt || request.prompt.trim().length === 0) {
@@ -227,6 +229,8 @@ export async function executeTask(
 			timeoutMs: request.timeoutMs,
 			maxOutputChars: request.maxOutputChars,
 			onEvent: options?.onEvent,
+			onPersistedEvent: options?.onPersistedEvent,
+			historyKind: "task",
 			startTime,
 		});
 
@@ -236,23 +240,6 @@ export async function executeTask(
 			requestedModel: config.llm.model,
 			requestedReasoningEffort: config.llm.reasoningEffort,
 		};
-
-		await persistExecutionHistory({
-			config,
-			taskId: result.taskId,
-			kind: "task",
-			status: result.status,
-			provider: result.provider,
-			requestedModel: result.requestedModel,
-			requestedReasoningEffort: result.requestedReasoningEffort,
-			workingDir: request.workingDir,
-			startedAt: new Date(startTime).toISOString(),
-			finishedAt: new Date().toISOString(),
-			durationMs: result.durationMs,
-			output: result.output,
-			error: result.error,
-			events: result.events,
-		});
 
 		return result;
 	} catch (err) {

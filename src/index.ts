@@ -71,6 +71,7 @@ export {
 	buildExecutionTranscript,
 	createExecutionHistoryStore,
 	listExecutionRuns,
+	markStaleExecutionRuns,
 	readExecutionRun,
 	summarizeExecutionEvents,
 } from "./events/store.js";

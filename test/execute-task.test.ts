@@ -108,6 +108,21 @@ function simulateErrorRun(errorMessage: string): void {
 	});
 }
 
+async function waitFor<T>(
+	read: () => Promise<T>,
+	predicate: (value: T) => boolean,
+	timeoutMs = 1_000,
+): Promise<T> {
+	const started = Date.now();
+	let lastValue = await read();
+	while (!predicate(lastValue)) {
+		if (Date.now() - started > timeoutMs) return lastValue;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		lastValue = await read();
+	}
+	return lastValue;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -472,6 +487,62 @@ describe("executeTask", () => {
 				outputPreview: "output",
 			});
 			expect(run?.transcript.map((message) => message.role)).toEqual(["user", "assistant"]);
+		} finally {
+			await rm(dataDir, { recursive: true, force: true });
+		}
+	});
+
+	it("persists running metadata and live events before runtime completes", async () => {
+		const dataDir = await mkdtemp(join(tmpdir(), "drmclaw-execute-running-history-"));
+		let finishRuntime!: () => void;
+		const persisted: PersistedRuntimeEvent[] = [];
+		mockRuntimeRun.mockImplementation(async (options) => {
+			const emit = (e: RuntimeEvent) => options.onEvent?.(e);
+			emit({ source: "runtime", type: "lifecycle", phase: "start" });
+			await new Promise<void>((resolve) => {
+				finishRuntime = resolve;
+			});
+			emit({ source: "codex", type: "stream", delta: "done" });
+			const result: TaskResult = { status: "completed", output: "done", durationMs: 25 };
+			emit({ source: "runtime", type: "lifecycle", phase: "end", result });
+			return result;
+		});
+
+		try {
+			const promise = executeTask(
+				{
+					prompt: "long running",
+					config: { dataDir },
+				},
+				{ onPersistedEvent: (event) => persisted.push(event) },
+			);
+
+			const runningRuns = await waitFor(
+				() => listExecutionRuns({ dataDir }),
+				(runs) => runs.some((run) => run.status === "running"),
+			);
+			const running = runningRuns.find((run) => run.status === "running");
+			expect(running).toMatchObject({
+				kind: "task",
+				status: "running",
+				provider: "codex-app-server",
+				promptPreview: "long running",
+			});
+			expect(running?.finishedAt).toBeNull();
+			expect(running?.durationMs).toBeNull();
+			expect(persisted[0]?.taskId).toBe(running?.taskId);
+
+			const inFlight = running ? await readExecutionRun(running.taskId, { dataDir }) : null;
+			expect(inFlight?.events.map((event) => event.event.type)).toContain("task_init");
+			expect(inFlight?.metadata.status).toBe("running");
+
+			finishRuntime();
+			const result = await promise;
+			expect(result.status).toBe("completed");
+
+			const completed = await readExecutionRun(result.taskId, { dataDir });
+			expect(completed?.metadata.status).toBe("completed");
+			expect(completed?.events.map((event) => event.event.type)).toContain("stream");
 		} finally {
 			await rm(dataDir, { recursive: true, force: true });
 		}

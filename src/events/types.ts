@@ -103,7 +103,7 @@ export interface ExecutionTimelineItem {
 export interface ExecutionRunMetadata {
 	taskId: string;
 	kind: ExecutionRunKind;
-	status: "completed" | "error";
+	status: "running" | "completed" | "error" | "stale";
 	provider: string;
 	requestedModel?: string;
 	requestedReasoningEffort?: string;
@@ -111,9 +111,10 @@ export interface ExecutionRunMetadata {
 	skill?: string;
 	action?: string;
 	inputs?: Record<string, unknown>;
+	processId?: number;
 	startedAt: string;
-	finishedAt: string;
-	durationMs: number;
+	finishedAt: string | null;
+	durationMs: number | null;
 	outputPreview?: string;
 	errorPreview?: string;
 	promptPreview?: string;
@@ -131,12 +132,13 @@ export interface ExecutionRunRecord {
 /**
  * ExecutionHistoryStore — durable Codex run history.
  *
- * Storage is append-oriented while a run is active and finalized by writing
- * metadata after completion.
+ * Storage is append-oriented while a run is active. Metadata is written with
+ * `status: "running"` at runtime start and overwritten after completion.
  */
 export interface ExecutionHistoryStore {
 	append(taskId: string, event: PersistedRuntimeEvent): Promise<void>;
 	saveMetadata(metadata: ExecutionRunMetadata): Promise<void>;
+	markStaleRuns(options?: { now?: Date; staleAfterMs?: number }): Promise<number>;
 	listRuns(options?: { limit?: number }): Promise<ExecutionRunMetadata[]>;
 	readRun(taskId: string): Promise<ExecutionRunRecord | null>;
 	listRunEvents(taskId: string): Promise<PersistedRuntimeEvent[]>;
